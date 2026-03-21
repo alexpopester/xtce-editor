@@ -513,7 +513,50 @@ pub(super) fn parse_argument_type_set<R: BufRead>(
     ctx: &mut ParseContext<R>,
     command: &mut CommandMetaData,
 ) -> Result<(), ParseError> {
-    todo!("loop: match local element name → call variant parser → insert into command.argument_types")
+    use crate::model::command::ArgumentType;
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => {
+                let at = match e.local_name().as_ref() {
+                    b"IntegerArgumentType" => {
+                        ArgumentType::Integer(parse_integer_argument_type(ctx, &e)?)
+                    }
+                    b"FloatArgumentType" => {
+                        ArgumentType::Float(parse_float_argument_type(ctx, &e)?)
+                    }
+                    b"EnumeratedArgumentType" => {
+                        ArgumentType::Enumerated(parse_enumerated_argument_type(ctx, &e)?)
+                    }
+                    b"BooleanArgumentType" => {
+                        ArgumentType::Boolean(parse_boolean_argument_type(ctx, &e)?)
+                    }
+                    b"StringArgumentType" => {
+                        ArgumentType::String(parse_string_argument_type(ctx, &e)?)
+                    }
+                    b"BinaryArgumentType" => {
+                        ArgumentType::Binary(parse_binary_argument_type(ctx, &e)?)
+                    }
+                    b"AggregateArgumentType" => {
+                        ArgumentType::Aggregate(parse_aggregate_argument_type(ctx, &e)?)
+                    }
+                    b"ArrayArgumentType" => {
+                        ArgumentType::Array(parse_array_argument_type(ctx, &e)?)
+                    }
+                    _ => {
+                        ctx.skip_element(&e)?;
+                        continue;
+                    }
+                };
+                command.argument_types.insert(at.name().to_owned(), at);
+            }
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</ArgumentTypeSet>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 // ── Concrete ArgumentType variant parsers ────────────────────────────────────
@@ -522,56 +565,271 @@ pub(super) fn parse_integer_argument_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<IntegerArgumentType, ParseError> {
-    todo!()
+    let mut t = IntegerArgumentType::new(
+        ctx.require_attr(start, "name", "IntegerArgumentType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.signed = ctx
+        .get_attr(start, "signed")
+        .map(|v| parse_bool("signed", &v))
+        .transpose()?
+        .unwrap_or(true);
+    t.size_in_bits = ctx
+        .get_attr(start, "sizeInBits")
+        .map(|v| parse_u32("sizeInBits", &v))
+        .transpose()?;
+    t.initial_value = ctx
+        .get_attr(start, "initialValue")
+        .map(|v| parse_i64("initialValue", &v))
+        .transpose()?;
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</IntegerArgumentType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_float_argument_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<FloatArgumentType, ParseError> {
-    todo!()
+    let mut t = FloatArgumentType::new(
+        ctx.require_attr(start, "name", "FloatArgumentType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.size_in_bits = ctx
+        .get_attr(start, "sizeInBits")
+        .map(|v| parse_u32("sizeInBits", &v))
+        .transpose()?;
+    t.initial_value = ctx
+        .get_attr(start, "initialValue")
+        .map(|v| parse_f64("initialValue", &v))
+        .transpose()?;
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"FloatDataEncoding" => t.encoding = Some(parse_float_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</FloatArgumentType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_enumerated_argument_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<EnumeratedArgumentType, ParseError> {
-    todo!()
+    let mut t = EnumeratedArgumentType::new(
+        ctx.require_attr(start, "name", "EnumeratedArgumentType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.initial_value = ctx.get_attr_owned(start, "initialValue");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
+                b"EnumerationList" => loop {
+                    match ctx.next()? {
+                        Event::Start(e) => match e.local_name().as_ref() {
+                            b"Enumeration" => {
+                                t.enumeration_list.push(parse_value_enumeration(ctx, &e)?)
+                            }
+                            _ => ctx.skip_element(&e)?,
+                        },
+                        Event::End(_) => break,
+                        Event::Eof => {
+                            return Err(ParseError::UnexpectedEof {
+                                expected: "</EnumerationList>",
+                            })
+                        }
+                        _ => {}
+                    }
+                },
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</EnumeratedArgumentType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_boolean_argument_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<BooleanArgumentType, ParseError> {
-    todo!()
+    let mut t = BooleanArgumentType::new(
+        ctx.require_attr(start, "name", "BooleanArgumentType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.one_string_value = ctx.get_attr_owned(start, "oneStringValue");
+    t.zero_string_value = ctx.get_attr_owned(start, "zeroStringValue");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</BooleanArgumentType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_string_argument_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<StringArgumentType, ParseError> {
-    todo!()
+    let mut t = StringArgumentType::new(
+        ctx.require_attr(start, "name", "StringArgumentType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.initial_value = ctx.get_attr_owned(start, "initialValue");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"StringDataEncoding" => t.encoding = Some(parse_string_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</StringArgumentType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_binary_argument_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<BinaryArgumentType, ParseError> {
-    todo!()
+    let mut t = BinaryArgumentType::new(
+        ctx.require_attr(start, "name", "BinaryArgumentType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.initial_value = ctx.get_attr_owned(start, "initialValue");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"BinaryDataEncoding" => t.encoding = Some(parse_binary_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</BinaryArgumentType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_aggregate_argument_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<AggregateArgumentType, ParseError> {
-    todo!()
+    use crate::model::command::ArgumentMember;
+    let mut t = AggregateArgumentType::new(
+        ctx.require_attr(start, "name", "AggregateArgumentType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"MemberList" => loop {
+                    match ctx.next()? {
+                        Event::Start(e) => match e.local_name().as_ref() {
+                            b"Member" => {
+                                let name =
+                                    ctx.require_attr(&e, "name", "Member")?.into_owned();
+                                let type_ref =
+                                    ctx.require_attr(&e, "typeRef", "Member")?.into_owned();
+                                let short_description =
+                                    ctx.get_attr_owned(&e, "shortDescription");
+                                t.member_list.push(ArgumentMember {
+                                    name,
+                                    type_ref,
+                                    short_description,
+                                });
+                                ctx.skip_element(&e)?;
+                            }
+                            _ => ctx.skip_element(&e)?,
+                        },
+                        Event::End(_) => break,
+                        Event::Eof => {
+                            return Err(ParseError::UnexpectedEof { expected: "</MemberList>" })
+                        }
+                        _ => {}
+                    }
+                },
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</AggregateArgumentType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_array_argument_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<ArrayArgumentType, ParseError> {
-    todo!()
+    let name = ctx.require_attr(start, "name", "ArrayArgumentType")?.into_owned();
+    let array_type_ref =
+        ctx.require_attr(start, "arrayTypeRef", "ArrayArgumentType")?.into_owned();
+    let mut t = ArrayArgumentType::new(name, array_type_ref);
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.number_of_dimensions = ctx
+        .get_attr(start, "numberOfDimensions")
+        .map(|v| parse_u32("numberOfDimensions", &v))
+        .transpose()?
+        .unwrap_or(1);
+
+    // ArrayArgumentType has no meaningful children for our model; drain to End.
+    ctx.skip_element(start)?;
+    Ok(t)
 }
 
 // ── Shared encoding / calibration parsers ────────────────────────────────────
