@@ -336,7 +336,36 @@ pub(super) fn parse_integer_data_encoding<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<IntegerDataEncoding, ParseError> {
-    todo!("parse sizeInBits, encoding, byteOrder attrs; parse DefaultCalibrator child")
+    let size_in_bits = parse_u32(
+        "sizeInBits",
+        &ctx.require_attr(start, "sizeInBits", "IntegerDataEncoding")?,
+    )?;
+    let encoding = ctx
+        .get_attr(start, "encoding")
+        .map(|v| parse_integer_encoding(&v))
+        .transpose()?
+        .unwrap_or_default();
+    let byte_order = ctx
+        .get_attr(start, "byteOrder")
+        .map(|v| parse_byte_order(&v))
+        .transpose()?;
+
+    let mut default_calibrator = None;
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"DefaultCalibrator" => default_calibrator = Some(parse_calibrator(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</IntegerDataEncoding>" })
+            }
+            _ => {}
+        }
+    }
+
+    Ok(IntegerDataEncoding { size_in_bits, encoding, byte_order, default_calibrator })
 }
 
 /// Parse a `<FloatDataEncoding>` element.
@@ -344,30 +373,308 @@ pub(super) fn parse_float_data_encoding<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<FloatDataEncoding, ParseError> {
-    todo!("parse sizeInBits, encoding, byteOrder attrs; parse DefaultCalibrator child")
+    let size_in_bits = parse_float_size(
+        &ctx.require_attr(start, "sizeInBits", "FloatDataEncoding")?,
+    )?;
+    let encoding = ctx
+        .get_attr(start, "encoding")
+        .map(|v| parse_float_encoding(&v))
+        .transpose()?
+        .unwrap_or_default();
+    let byte_order = ctx
+        .get_attr(start, "byteOrder")
+        .map(|v| parse_byte_order(&v))
+        .transpose()?;
+
+    let mut default_calibrator = None;
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"DefaultCalibrator" => default_calibrator = Some(parse_calibrator(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</FloatDataEncoding>" })
+            }
+            _ => {}
+        }
+    }
+
+    Ok(FloatDataEncoding { size_in_bits, encoding, byte_order, default_calibrator })
 }
 
 /// Parse a `<StringDataEncoding>` element.
+///
+/// The optional `<SizeInBits>` child has three mutually exclusive inner forms:
+/// `<Fixed>`, `<TerminationChar>`, and `<Variable>`.
 pub(super) fn parse_string_data_encoding<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<StringDataEncoding, ParseError> {
-    todo!("parse encoding attr; parse SizeInBits child (Fixed/TermChar/Variable)")
+    let encoding = ctx
+        .get_attr(start, "encoding")
+        .map(|v| parse_string_encoding(&v))
+        .transpose()?
+        .unwrap_or_default();
+    let byte_order = ctx
+        .get_attr(start, "byteOrder")
+        .map(|v| parse_byte_order(&v))
+        .transpose()?;
+
+    let mut size_in_bits = None;
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"SizeInBits" => size_in_bits = Some(parse_string_size(ctx)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</StringDataEncoding>" })
+            }
+            _ => {}
+        }
+    }
+
+    Ok(StringDataEncoding { encoding, byte_order, size_in_bits })
+}
+
+/// Parse the contents of a `<SizeInBits>` element inside a StringDataEncoding.
+///
+/// Dispatches on the first child element: `Fixed`, `TerminationChar`, or
+/// `Variable`. Any other child is skipped and the function returns `None`
+/// (no size constraint was parseable).
+fn parse_string_size<R: BufRead>(ctx: &mut ParseContext<R>) -> Result<StringSize, ParseError> {
+    let mut result = None;
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"Fixed" => {
+                    // <Fixed><FixedValue>16</FixedValue></Fixed>
+                    let mut bits = None;
+                    loop {
+                        match ctx.next()? {
+                            Event::Start(e) => match e.local_name().as_ref() {
+                                b"FixedValue" => {
+                                    bits = Some(parse_u32("FixedValue", &ctx.read_text_content()?)?)
+                                }
+                                _ => ctx.skip_element(&e)?,
+                            },
+                            Event::End(_) => break,
+                            Event::Eof => {
+                                return Err(ParseError::UnexpectedEof { expected: "</Fixed>" })
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(n) = bits {
+                        result = Some(StringSize::Fixed(n));
+                    }
+                }
+                b"TerminationChar" => {
+                    // termChar attribute is a hex byte value, e.g. "00"
+                    let raw = ctx.get_attr(&e, "termChar").unwrap_or_default();
+                    let byte = u8::from_str_radix(&raw, 16).unwrap_or(0);
+                    result = Some(StringSize::TerminationChar(byte));
+                    ctx.skip_element(&e)?;
+                }
+                b"Variable" => {
+                    let max = ctx
+                        .get_attr(&e, "maxSizeInBits")
+                        .map(|v| parse_u32("maxSizeInBits", &v))
+                        .transpose()?
+                        .unwrap_or(0);
+                    result = Some(StringSize::Variable { max_size_in_bits: max });
+                    ctx.skip_element(&e)?;
+                }
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => return Err(ParseError::UnexpectedEof { expected: "</SizeInBits>" }),
+            _ => {}
+        }
+    }
+    // Fall back to a zero-width fixed size if no child was recognised.
+    Ok(result.unwrap_or(StringSize::Fixed(0)))
 }
 
 /// Parse a `<BinaryDataEncoding>` element.
+///
+/// The `<SizeInBits>` child contains either a `<FixedValue>` text node (fixed
+/// number of bits) or a `<DynamicValue>` element with a `sizeReference` attr.
 pub(super) fn parse_binary_data_encoding<R: BufRead>(
     ctx: &mut ParseContext<R>,
-    start: &BytesStart<'_>,
+    _start: &BytesStart<'_>,
 ) -> Result<BinaryDataEncoding, ParseError> {
-    todo!("parse SizeInBits child (Fixed or variable)")
+    let mut size_in_bits = BinarySize::Fixed(0);
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"SizeInBits" => {
+                    loop {
+                        match ctx.next()? {
+                            Event::Start(e) => match e.local_name().as_ref() {
+                                b"FixedValue" => {
+                                    let n = parse_u32("FixedValue", &ctx.read_text_content()?)?;
+                                    size_in_bits = BinarySize::Fixed(n);
+                                }
+                                b"DynamicValue" => {
+                                    let r = ctx
+                                        .get_attr_owned(&e, "sizeReference")
+                                        .unwrap_or_default();
+                                    size_in_bits = BinarySize::Variable { size_reference: r };
+                                    ctx.skip_element(&e)?;
+                                }
+                                _ => ctx.skip_element(&e)?,
+                            },
+                            Event::End(_) => break,
+                            Event::Eof => {
+                                return Err(ParseError::UnexpectedEof {
+                                    expected: "</SizeInBits>",
+                                })
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</BinaryDataEncoding>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(BinaryDataEncoding { size_in_bits })
 }
 
-/// Parse a `<DefaultCalibrator>` element (Polynomial or Spline).
+/// Parse a `<DefaultCalibrator>` element.
+///
+/// Dispatches on the first child: `PolynomialCalibrator` (collects `Term`
+/// children) or `SplineCalibrator` (reads `order`/`extrapolate` attrs and
+/// collects `SplinePoint` children).
 fn parse_calibrator<R: BufRead>(
     ctx: &mut ParseContext<R>,
     _start: &BytesStart<'_>,
 ) -> Result<Calibrator, ParseError> {
-    todo!("dispatch on PolynomialCalibrator or SplineCalibrator child element")
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"PolynomialCalibrator" => {
+                    let mut coefficients: Vec<(u32, f64)> = Vec::new();
+                    loop {
+                        match ctx.next()? {
+                            Event::Start(e) => match e.local_name().as_ref() {
+                                b"Term" => {
+                                    let exp = parse_u32(
+                                        "exponent",
+                                        &ctx.require_attr(&e, "exponent", "Term")?,
+                                    )?;
+                                    let coef = parse_f64(
+                                        "coefficient",
+                                        &ctx.require_attr(&e, "coefficient", "Term")?,
+                                    )?;
+                                    coefficients.push((exp, coef));
+                                    ctx.skip_element(&e)?;
+                                }
+                                _ => ctx.skip_element(&e)?,
+                            },
+                            Event::End(_) => break,
+                            Event::Eof => {
+                                return Err(ParseError::UnexpectedEof {
+                                    expected: "</PolynomialCalibrator>",
+                                })
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Build coefficient Vec indexed by exponent (sparse → dense).
+                    let max_exp = coefficients.iter().map(|(e, _)| *e).max().unwrap_or(0) as usize;
+                    let mut dense = vec![0.0f64; max_exp + 1];
+                    for (exp, coef) in coefficients {
+                        dense[exp as usize] = coef;
+                    }
+                    // Consume the DefaultCalibrator End tag.
+                    loop {
+                        match ctx.next()? {
+                            Event::End(_) => break,
+                            Event::Eof => {
+                                return Err(ParseError::UnexpectedEof {
+                                    expected: "</DefaultCalibrator>",
+                                })
+                            }
+                            _ => {}
+                        }
+                    }
+                    return Ok(Calibrator::Polynomial(PolynomialCalibrator {
+                        coefficients: dense,
+                    }));
+                }
+                b"SplineCalibrator" => {
+                    let order = ctx
+                        .get_attr(&e, "order")
+                        .map(|v| parse_u32("order", &v))
+                        .transpose()?
+                        .unwrap_or(0);
+                    let extrapolate = ctx
+                        .get_attr(&e, "extrapolate")
+                        .map(|v| parse_bool("extrapolate", &v))
+                        .transpose()?
+                        .unwrap_or(false);
+                    let mut points = Vec::new();
+                    loop {
+                        match ctx.next()? {
+                            Event::Start(e) => match e.local_name().as_ref() {
+                                b"SplinePoint" => {
+                                    let raw = parse_f64(
+                                        "raw",
+                                        &ctx.require_attr(&e, "raw", "SplinePoint")?,
+                                    )?;
+                                    let calibrated = parse_f64(
+                                        "calibrated",
+                                        &ctx.require_attr(&e, "calibrated", "SplinePoint")?,
+                                    )?;
+                                    points.push(SplinePoint { raw, calibrated });
+                                    ctx.skip_element(&e)?;
+                                }
+                                _ => ctx.skip_element(&e)?,
+                            },
+                            Event::End(_) => break,
+                            Event::Eof => {
+                                return Err(ParseError::UnexpectedEof {
+                                    expected: "</SplineCalibrator>",
+                                })
+                            }
+                            _ => {}
+                        }
+                    }
+                    // Consume the DefaultCalibrator End tag.
+                    loop {
+                        match ctx.next()? {
+                            Event::End(_) => break,
+                            Event::Eof => {
+                                return Err(ParseError::UnexpectedEof {
+                                    expected: "</DefaultCalibrator>",
+                                })
+                            }
+                            _ => {}
+                        }
+                    }
+                    return Ok(Calibrator::SplineCalibrator(SplineCalibrator {
+                        order,
+                        extrapolate,
+                        points,
+                    }));
+                }
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => return Err(ParseError::UnexpectedEof { expected: "</DefaultCalibrator>" }),
+            _ => {}
+        }
+    }
+    Err(ParseError::UnexpectedElement("DefaultCalibrator with no recognised child".into()))
 }
 
