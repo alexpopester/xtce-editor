@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "xtce-core",
+    "xtce-tui",
+]
+resolver = "2"
