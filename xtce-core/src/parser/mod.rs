@@ -399,63 +399,299 @@ mod tests {
 
     #[test]
     fn parameter_set() {
-        todo!("parse multiple <Parameter> elements, assert names and parameterTypeRef values")
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterSet>
+                  <Parameter name="P1" parameterTypeRef="IntT" shortDescription="first"/>
+                  <Parameter name="P2" parameterTypeRef="FloatT"/>
+                </ParameterSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        assert_eq!(tm.parameters.len(), 2);
+
+        let p1 = tm.parameters.get("P1").unwrap();
+        assert_eq!(p1.name, "P1");
+        assert_eq!(p1.parameter_type_ref, "IntT");
+        assert_eq!(p1.short_description.as_deref(), Some("first"));
+
+        let p2 = tm.parameters.get("P2").unwrap();
+        assert_eq!(p2.name, "P2");
+        assert_eq!(p2.parameter_type_ref, "FloatT");
+        assert!(p2.short_description.is_none());
     }
 
     // ── Test 12: SequenceContainer simple ────────────────────────────────────
 
     #[test]
     fn sequence_container_simple() {
-        todo!("parse SequenceContainer with an EntryList of ParameterRefEntry elements")
+        use crate::model::container::SequenceEntry;
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ContainerSet>
+                  <SequenceContainer name="PrimaryHeader" shortDescription="CCSDS header">
+                    <EntryList>
+                      <ParameterRefEntry parameterRef="APID"/>
+                      <ParameterRefEntry parameterRef="SeqCount"/>
+                    </EntryList>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let c = tm.containers.get("PrimaryHeader").unwrap();
+        assert_eq!(c.name, "PrimaryHeader");
+        assert_eq!(c.short_description.as_deref(), Some("CCSDS header"));
+        assert!(c.base_container.is_none());
+        assert!(!c.r#abstract);
+        assert_eq!(c.entry_list.len(), 2);
+
+        let SequenceEntry::ParameterRef(e0) = &c.entry_list[0] else {
+            panic!("expected ParameterRef")
+        };
+        assert_eq!(e0.parameter_ref, "APID");
+
+        let SequenceEntry::ParameterRef(e1) = &c.entry_list[1] else {
+            panic!("expected ParameterRef")
+        };
+        assert_eq!(e1.parameter_ref, "SeqCount");
     }
 
     // ── Test 13: SequenceContainer with BaseContainer ────────────────────────
 
     #[test]
     fn sequence_container_with_base() {
-        todo!("parse SequenceContainer with BaseContainer + RestrictionCriteria (single Comparison)")
+        use crate::model::container::{ComparisonOperator, RestrictionCriteria, SequenceEntry};
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ContainerSet>
+                  <SequenceContainer name="TmPacket">
+                    <BaseContainer containerRef="PrimaryHeader">
+                      <RestrictionCriteria>
+                        <Comparison parameterRef="APID" value="100"
+                            comparisonOperator="==" useCalibratedValue="false"/>
+                      </RestrictionCriteria>
+                    </BaseContainer>
+                    <EntryList>
+                      <ParameterRefEntry parameterRef="Payload"/>
+                    </EntryList>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let c = tm.containers.get("TmPacket").unwrap();
+
+        let base = c.base_container.as_ref().unwrap();
+        assert_eq!(base.container_ref, "PrimaryHeader");
+
+        let RestrictionCriteria::Comparison(cmp) =
+            base.restriction_criteria.as_ref().unwrap()
+        else {
+            panic!("expected Comparison")
+        };
+        assert_eq!(cmp.parameter_ref, "APID");
+        assert_eq!(cmp.value, "100");
+        assert_eq!(cmp.comparison_operator, ComparisonOperator::Equality);
+        assert!(!cmp.use_calibrated_value);
+
+        assert_eq!(c.entry_list.len(), 1);
     }
 
     // ── Test 14: SequenceContainer with ComparisonList ───────────────────────
 
     #[test]
     fn sequence_container_comparison_list() {
-        todo!("parse SequenceContainer with ComparisonList containing multiple Comparison elements")
+        use crate::model::container::RestrictionCriteria;
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ContainerSet>
+                  <SequenceContainer name="TmPacket">
+                    <BaseContainer containerRef="PrimaryHeader">
+                      <RestrictionCriteria>
+                        <ComparisonList>
+                          <Comparison parameterRef="APID" value="100"/>
+                          <Comparison parameterRef="Version" value="1"/>
+                        </ComparisonList>
+                      </RestrictionCriteria>
+                    </BaseContainer>
+                    <EntryList/>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let c = tm.containers.get("TmPacket").unwrap();
+
+        let base = c.base_container.as_ref().unwrap();
+        let RestrictionCriteria::ComparisonList(list) =
+            base.restriction_criteria.as_ref().unwrap()
+        else {
+            panic!("expected ComparisonList")
+        };
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].parameter_ref, "APID");
+        assert_eq!(list[0].value, "100");
+        assert_eq!(list[1].parameter_ref, "Version");
+        assert_eq!(list[1].value, "1");
     }
 
     // ── Test 15: MetaCommand simple ──────────────────────────────────────────
 
     #[test]
     fn meta_command_simple() {
-        todo!("parse MetaCommand with ArgumentList and CommandContainer")
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <CommandMetaData>
+                <MetaCommandSet>
+                  <MetaCommand name="SendTc" shortDescription="A command">
+                    <ArgumentList>
+                      <Argument name="arg1" argumentTypeRef="IntT"/>
+                      <Argument name="arg2" argumentTypeRef="FloatT" initialValue="3.14"/>
+                    </ArgumentList>
+                    <CommandContainer name="SendTcContainer">
+                      <EntryList>
+                        <ArgumentRefEntry argumentRef="arg1"/>
+                        <ArgumentRefEntry argumentRef="arg2"/>
+                      </EntryList>
+                    </CommandContainer>
+                  </MetaCommand>
+                </MetaCommandSet>
+              </CommandMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let cmd = ss.command.as_ref().unwrap();
+        let mc = cmd.meta_commands.get("SendTc").unwrap();
+        assert_eq!(mc.name, "SendTc");
+        assert_eq!(mc.short_description.as_deref(), Some("A command"));
+        assert!(!mc.r#abstract);
+        assert!(mc.base_meta_command.is_none());
+
+        assert_eq!(mc.argument_list.len(), 2);
+        assert_eq!(mc.argument_list[0].name, "arg1");
+        assert_eq!(mc.argument_list[0].argument_type_ref, "IntT");
+        assert!(mc.argument_list[0].initial_value.is_none());
+        assert_eq!(mc.argument_list[1].name, "arg2");
+        assert_eq!(mc.argument_list[1].initial_value.as_deref(), Some("3.14"));
+
+        let cc = mc.command_container.as_ref().unwrap();
+        assert_eq!(cc.name, "SendTcContainer");
+        assert_eq!(cc.entry_list.len(), 2);
     }
 
     // ── Test 16: MetaCommand with base ───────────────────────────────────────
 
     #[test]
     fn meta_command_with_base() {
-        todo!("parse MetaCommand with baseMetaCommand attribute set")
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <CommandMetaData>
+                <MetaCommandSet>
+                  <MetaCommand name="BaseCmd" abstract="true">
+                    <ArgumentList/>
+                    <CommandContainer name="BaseCmdContainer">
+                      <EntryList/>
+                    </CommandContainer>
+                  </MetaCommand>
+                  <MetaCommand name="ChildCmd" baseMetaCommand="BaseCmd">
+                    <CommandContainer name="ChildCmdContainer">
+                      <EntryList/>
+                    </CommandContainer>
+                  </MetaCommand>
+                </MetaCommandSet>
+              </CommandMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let cmd = ss.command.as_ref().unwrap();
+
+        let base_mc = cmd.meta_commands.get("BaseCmd").unwrap();
+        assert!(base_mc.r#abstract);
+        assert!(base_mc.base_meta_command.is_none());
+
+        let child_mc = cmd.meta_commands.get("ChildCmd").unwrap();
+        assert!(!child_mc.r#abstract);
+        assert_eq!(child_mc.base_meta_command.as_deref(), Some("BaseCmd"));
     }
 
     // ── Test 17: nested SpaceSystems ─────────────────────────────────────────
 
     #[test]
     fn nested_space_systems() {
-        todo!("parse SpaceSystem that contains child SpaceSystems recursively")
+        let ss = parse_str(r#"
+            <SpaceSystem name="Root">
+              <SpaceSystem name="Child1">
+                <SpaceSystem name="Grandchild"/>
+              </SpaceSystem>
+              <SpaceSystem name="Child2"/>
+            </SpaceSystem>
+        "#).unwrap();
+
+        assert_eq!(ss.name, "Root");
+        assert_eq!(ss.sub_systems.len(), 2);
+        assert_eq!(ss.sub_systems[0].name, "Child1");
+        assert_eq!(ss.sub_systems[0].sub_systems.len(), 1);
+        assert_eq!(ss.sub_systems[0].sub_systems[0].name, "Grandchild");
+        assert_eq!(ss.sub_systems[1].name, "Child2");
+        assert!(ss.sub_systems[1].sub_systems.is_empty());
     }
 
     // ── Test 18: unknown elements are skipped ─────────────────────────────────
 
     #[test]
     fn unknown_elements_skipped() {
-        todo!("parse document with future/unknown elements, assert no error and known fields parsed")
+        // Future XTCE extension elements and deeply-nested unknown content
+        // must be silently skipped without causing a parse error.
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test" shortDescription="known attr">
+              <UnknownFutureElement foo="bar">
+                <DeepChild>text</DeepChild>
+              </UnknownFutureElement>
+              <LongDescription>Known text</LongDescription>
+              <AnotherUnknown/>
+            </SpaceSystem>
+        "#).unwrap();
+
+        assert_eq!(ss.name, "Test");
+        assert_eq!(ss.short_description.as_deref(), Some("known attr"));
+        assert_eq!(ss.long_description.as_deref(), Some("Known text"));
     }
 
     // ── Test 19: missing required attribute error ─────────────────────────────
 
     #[test]
-    #[should_panic] // replace with proper error assertion once implemented
     fn missing_required_attr_error() {
-        todo!("parse '<Parameter parameterTypeRef=\"T\"/>' (no name), assert MissingAttribute error")
+        // <Parameter> without a name attribute must return MissingAttribute.
+        use crate::ParseError;
+        let result = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterSet>
+                  <Parameter parameterTypeRef="T"/>
+                </ParameterSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#);
+        assert!(
+            matches!(result, Err(ParseError::MissingAttribute { attr: "name", .. })),
+            "expected MissingAttribute(name), got {:?}",
+            result
+        );
     }
 }
