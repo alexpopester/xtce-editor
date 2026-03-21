@@ -177,8 +177,12 @@ pub(super) fn parse_unit_set<R: BufRead>(
 }
 
 /// Parse an `<Enumeration>` element inside `<EnumerationList>`.
+///
+/// Reads all attributes, then drains to the closing End tag (required because
+/// `expand_empty_elements(true)` always generates a Start+End pair, even for
+/// self-closing `<Enumeration ... />` elements).
 pub(super) fn parse_value_enumeration<R: BufRead>(
-    ctx: &ParseContext<R>,
+    ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<ValueEnumeration, ParseError> {
     let value = parse_i64("value", &ctx.require_attr(start, "value", "Enumeration")?)?;
@@ -188,6 +192,8 @@ pub(super) fn parse_value_enumeration<R: BufRead>(
         .map(|v| parse_i64("maxValue", &v))
         .transpose()?;
     let short_description = ctx.get_attr_owned(start, "shortDescription");
+    // Enumeration has no child elements; drain to its End tag.
+    ctx.skip_element(start)?;
     Ok(ValueEnumeration { value, label, max_value, short_description })
 }
 

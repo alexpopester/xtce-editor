@@ -144,56 +144,255 @@ mod tests {
 
     #[test]
     fn integer_parameter_type() {
-        todo!("parse IntegerParameterType with signed, sizeInBits, IntegerDataEncoding")
+        use crate::model::telemetry::ParameterType;
+        use crate::model::types::IntegerEncoding;
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <IntegerParameterType name="MyInt" shortDescription="An int"
+                      signed="false" sizeInBits="16">
+                    <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+                  </IntegerParameterType>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let pt = tm.parameter_types.get("MyInt").unwrap();
+        let ParameterType::Integer(t) = pt else { panic!("expected Integer variant") };
+
+        assert_eq!(t.name, "MyInt");
+        assert_eq!(t.short_description.as_deref(), Some("An int"));
+        assert!(!t.signed);
+        assert_eq!(t.size_in_bits, Some(16));
+
+        let enc = t.encoding.as_ref().unwrap();
+        assert_eq!(enc.size_in_bits, 16);
+        assert_eq!(enc.encoding, IntegerEncoding::Unsigned);
     }
 
     // ── Test 4: FloatParameterType ───────────────────────────────────────────
 
     #[test]
     fn float_parameter_type() {
-        todo!("parse FloatParameterType with FloatDataEncoding")
+        use crate::model::telemetry::ParameterType;
+        use crate::model::types::{FloatEncoding, FloatSizeInBits};
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <FloatParameterType name="MyFloat" shortDescription="A float">
+                    <FloatDataEncoding sizeInBits="32" encoding="IEEE754_1985"/>
+                  </FloatParameterType>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let pt = tm.parameter_types.get("MyFloat").unwrap();
+        let ParameterType::Float(t) = pt else { panic!("expected Float variant") };
+
+        assert_eq!(t.name, "MyFloat");
+        assert_eq!(t.short_description.as_deref(), Some("A float"));
+
+        let enc = t.encoding.as_ref().unwrap();
+        assert_eq!(enc.size_in_bits, FloatSizeInBits::F32);
+        assert_eq!(enc.encoding, FloatEncoding::IEEE754_1985);
     }
 
     // ── Test 5: EnumeratedParameterType ──────────────────────────────────────
 
     #[test]
     fn enumerated_parameter_type() {
-        todo!("parse EnumeratedParameterType with EnumerationList values")
+        use crate::model::telemetry::ParameterType;
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <EnumeratedParameterType name="MyEnum">
+                    <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+                    <EnumerationList>
+                      <Enumeration value="0" label="OFF"/>
+                      <Enumeration value="1" label="ON" shortDescription="Active"/>
+                    </EnumerationList>
+                  </EnumeratedParameterType>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let pt = tm.parameter_types.get("MyEnum").unwrap();
+        let ParameterType::Enumerated(t) = pt else { panic!("expected Enumerated variant") };
+
+        assert_eq!(t.name, "MyEnum");
+        assert!(t.encoding.is_some());
+
+        assert_eq!(t.enumeration_list.len(), 2);
+        assert_eq!(t.enumeration_list[0].value, 0);
+        assert_eq!(t.enumeration_list[0].label, "OFF");
+        assert!(t.enumeration_list[0].short_description.is_none());
+        assert_eq!(t.enumeration_list[1].value, 1);
+        assert_eq!(t.enumeration_list[1].label, "ON");
+        assert_eq!(t.enumeration_list[1].short_description.as_deref(), Some("Active"));
     }
 
     // ── Test 6: BooleanParameterType ─────────────────────────────────────────
 
     #[test]
     fn boolean_parameter_type() {
-        todo!("parse BooleanParameterType with oneStringValue and zeroStringValue attrs")
+        use crate::model::telemetry::ParameterType;
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <BooleanParameterType name="MyBool"
+                      oneStringValue="YES" zeroStringValue="NO"/>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let pt = tm.parameter_types.get("MyBool").unwrap();
+        let ParameterType::Boolean(t) = pt else { panic!("expected Boolean variant") };
+
+        assert_eq!(t.name, "MyBool");
+        assert_eq!(t.one_string_value.as_deref(), Some("YES"));
+        assert_eq!(t.zero_string_value.as_deref(), Some("NO"));
     }
 
     // ── Test 7: StringParameterType ──────────────────────────────────────────
 
     #[test]
     fn string_parameter_type() {
-        todo!("parse StringParameterType with StringDataEncoding")
+        use crate::model::telemetry::ParameterType;
+        use crate::model::types::{StringEncoding, StringSize};
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <StringParameterType name="MyString">
+                    <StringDataEncoding encoding="UTF-8">
+                      <SizeInBits>
+                        <Fixed><FixedValue>64</FixedValue></Fixed>
+                      </SizeInBits>
+                    </StringDataEncoding>
+                  </StringParameterType>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let pt = tm.parameter_types.get("MyString").unwrap();
+        let ParameterType::String(t) = pt else { panic!("expected String variant") };
+
+        assert_eq!(t.name, "MyString");
+        let enc = t.encoding.as_ref().unwrap();
+        assert_eq!(enc.encoding, StringEncoding::UTF8);
+        assert_eq!(enc.size_in_bits, Some(StringSize::Fixed(64)));
     }
 
     // ── Test 8: BinaryParameterType ──────────────────────────────────────────
 
     #[test]
     fn binary_parameter_type() {
-        todo!("parse BinaryParameterType with BinaryDataEncoding")
+        use crate::model::telemetry::ParameterType;
+        use crate::model::types::BinarySize;
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <BinaryParameterType name="MyBinary">
+                    <BinaryDataEncoding>
+                      <SizeInBits>
+                        <FixedValue>32</FixedValue>
+                      </SizeInBits>
+                    </BinaryDataEncoding>
+                  </BinaryParameterType>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let pt = tm.parameter_types.get("MyBinary").unwrap();
+        let ParameterType::Binary(t) = pt else { panic!("expected Binary variant") };
+
+        assert_eq!(t.name, "MyBinary");
+        let enc = t.encoding.as_ref().unwrap();
+        assert_eq!(enc.size_in_bits, BinarySize::Fixed(32));
     }
 
     // ── Test 9: AggregateParameterType ───────────────────────────────────────
 
     #[test]
     fn aggregate_parameter_type() {
-        todo!("parse AggregateParameterType with MemberList containing named members")
+        use crate::model::telemetry::ParameterType;
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <AggregateParameterType name="MyAggregate" shortDescription="A struct">
+                    <MemberList>
+                      <Member name="field1" typeRef="MyInt"/>
+                      <Member name="field2" typeRef="MyFloat" shortDescription="float field"/>
+                    </MemberList>
+                  </AggregateParameterType>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let pt = tm.parameter_types.get("MyAggregate").unwrap();
+        let ParameterType::Aggregate(t) = pt else { panic!("expected Aggregate variant") };
+
+        assert_eq!(t.name, "MyAggregate");
+        assert_eq!(t.short_description.as_deref(), Some("A struct"));
+        assert_eq!(t.member_list.len(), 2);
+        assert_eq!(t.member_list[0].name, "field1");
+        assert_eq!(t.member_list[0].type_ref, "MyInt");
+        assert!(t.member_list[0].short_description.is_none());
+        assert_eq!(t.member_list[1].name, "field2");
+        assert_eq!(t.member_list[1].type_ref, "MyFloat");
+        assert_eq!(t.member_list[1].short_description.as_deref(), Some("float field"));
     }
 
     // ── Test 10: ArrayParameterType ──────────────────────────────────────────
 
     #[test]
     fn array_parameter_type() {
-        todo!("parse ArrayParameterType with arrayTypeRef and numberOfDimensions")
+        use crate::model::telemetry::ParameterType;
+
+        let ss = parse_str(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <ArrayParameterType name="MyArray" arrayTypeRef="MyInt" numberOfDimensions="2"/>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#).unwrap();
+
+        let tm = ss.telemetry.as_ref().unwrap();
+        let pt = tm.parameter_types.get("MyArray").unwrap();
+        let ParameterType::Array(t) = pt else { panic!("expected Array variant") };
+
+        assert_eq!(t.name, "MyArray");
+        assert_eq!(t.array_type_ref, "MyInt");
+        assert_eq!(t.number_of_dimensions, 2);
     }
 
     // ── Test 11: ParameterSet ────────────────────────────────────────────────
