@@ -200,7 +200,50 @@ pub(super) fn parse_parameter_type_set<R: BufRead>(
     ctx: &mut ParseContext<R>,
     telemetry: &mut TelemetryMetaData,
 ) -> Result<(), ParseError> {
-    todo!("loop: match local element name → call variant parser → insert into telemetry.parameter_types")
+    use crate::model::telemetry::ParameterType;
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => {
+                let pt = match e.local_name().as_ref() {
+                    b"IntegerParameterType" => {
+                        ParameterType::Integer(parse_integer_parameter_type(ctx, &e)?)
+                    }
+                    b"FloatParameterType" => {
+                        ParameterType::Float(parse_float_parameter_type(ctx, &e)?)
+                    }
+                    b"EnumeratedParameterType" => {
+                        ParameterType::Enumerated(parse_enumerated_parameter_type(ctx, &e)?)
+                    }
+                    b"BooleanParameterType" => {
+                        ParameterType::Boolean(parse_boolean_parameter_type(ctx, &e)?)
+                    }
+                    b"StringParameterType" => {
+                        ParameterType::String(parse_string_parameter_type(ctx, &e)?)
+                    }
+                    b"BinaryParameterType" => {
+                        ParameterType::Binary(parse_binary_parameter_type(ctx, &e)?)
+                    }
+                    b"AggregateParameterType" => {
+                        ParameterType::Aggregate(parse_aggregate_parameter_type(ctx, &e)?)
+                    }
+                    b"ArrayParameterType" => {
+                        ParameterType::Array(parse_array_parameter_type(ctx, &e)?)
+                    }
+                    _ => {
+                        ctx.skip_element(&e)?;
+                        continue;
+                    }
+                };
+                telemetry.parameter_types.insert(pt.name().to_owned(), pt);
+            }
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</ParameterTypeSet>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 // ── Concrete ParameterType variant parsers ───────────────────────────────────
@@ -209,56 +252,258 @@ pub(super) fn parse_integer_parameter_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<IntegerParameterType, ParseError> {
-    todo!("parse name, signed, sizeInBits attrs; parse IntegerDataEncoding child")
+    let mut t = IntegerParameterType::new(
+        ctx.require_attr(start, "name", "IntegerParameterType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.signed = ctx
+        .get_attr(start, "signed")
+        .map(|v| parse_bool("signed", &v))
+        .transpose()?
+        .unwrap_or(true);
+    t.size_in_bits = ctx
+        .get_attr(start, "sizeInBits")
+        .map(|v| parse_u32("sizeInBits", &v))
+        .transpose()?;
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</IntegerParameterType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_float_parameter_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<FloatParameterType, ParseError> {
-    todo!("parse name; parse FloatDataEncoding child")
+    let mut t = FloatParameterType::new(
+        ctx.require_attr(start, "name", "FloatParameterType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"FloatDataEncoding" => t.encoding = Some(parse_float_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</FloatParameterType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_enumerated_parameter_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<EnumeratedParameterType, ParseError> {
-    todo!("parse name; parse EnumerationList children")
+    let mut t = EnumeratedParameterType::new(
+        ctx.require_attr(start, "name", "EnumeratedParameterType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
+                b"EnumerationList" => loop {
+                    match ctx.next()? {
+                        Event::Start(e) => match e.local_name().as_ref() {
+                            b"Enumeration" => {
+                                t.enumeration_list.push(parse_value_enumeration(ctx, &e)?)
+                            }
+                            _ => ctx.skip_element(&e)?,
+                        },
+                        Event::End(_) => break,
+                        Event::Eof => {
+                            return Err(ParseError::UnexpectedEof {
+                                expected: "</EnumerationList>",
+                            })
+                        }
+                        _ => {}
+                    }
+                },
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</EnumeratedParameterType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_boolean_parameter_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<BooleanParameterType, ParseError> {
-    todo!("parse name, oneStringValue, zeroStringValue attrs")
+    let mut t = BooleanParameterType::new(
+        ctx.require_attr(start, "name", "BooleanParameterType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.one_string_value = ctx.get_attr_owned(start, "oneStringValue");
+    t.zero_string_value = ctx.get_attr_owned(start, "zeroStringValue");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</BooleanParameterType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_string_parameter_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<StringParameterType, ParseError> {
-    todo!("parse name; parse StringDataEncoding child")
+    let mut t = StringParameterType::new(
+        ctx.require_attr(start, "name", "StringParameterType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"StringDataEncoding" => t.encoding = Some(parse_string_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</StringParameterType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_binary_parameter_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<BinaryParameterType, ParseError> {
-    todo!("parse name; parse BinaryDataEncoding child")
+    let mut t = BinaryParameterType::new(
+        ctx.require_attr(start, "name", "BinaryParameterType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"BinaryDataEncoding" => t.encoding = Some(parse_binary_data_encoding(ctx, &e)?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</BinaryParameterType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_aggregate_parameter_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<AggregateParameterType, ParseError> {
-    todo!("parse name; parse MemberList children into member_list")
+    use crate::model::telemetry::Member;
+    let mut t = AggregateParameterType::new(
+        ctx.require_attr(start, "name", "AggregateParameterType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"MemberList" => loop {
+                    match ctx.next()? {
+                        Event::Start(e) => match e.local_name().as_ref() {
+                            b"Member" => {
+                                let name =
+                                    ctx.require_attr(&e, "name", "Member")?.into_owned();
+                                let type_ref =
+                                    ctx.require_attr(&e, "typeRef", "Member")?.into_owned();
+                                let short_description =
+                                    ctx.get_attr_owned(&e, "shortDescription");
+                                t.member_list.push(Member { name, type_ref, short_description });
+                                ctx.skip_element(&e)?;
+                            }
+                            _ => ctx.skip_element(&e)?,
+                        },
+                        Event::End(_) => break,
+                        Event::Eof => {
+                            return Err(ParseError::UnexpectedEof { expected: "</MemberList>" })
+                        }
+                        _ => {}
+                    }
+                },
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</AggregateParameterType>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
 }
 
 pub(super) fn parse_array_parameter_type<R: BufRead>(
     ctx: &mut ParseContext<R>,
     start: &BytesStart<'_>,
 ) -> Result<ArrayParameterType, ParseError> {
-    todo!("parse name and arrayTypeRef attrs; parse number of dimensions")
+    let name = ctx.require_attr(start, "name", "ArrayParameterType")?.into_owned();
+    let array_type_ref =
+        ctx.require_attr(start, "arrayTypeRef", "ArrayParameterType")?.into_owned();
+    let mut t = ArrayParameterType::new(name, array_type_ref);
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.number_of_dimensions = ctx
+        .get_attr(start, "numberOfDimensions")
+        .map(|v| parse_u32("numberOfDimensions", &v))
+        .transpose()?
+        .unwrap_or(1);
+
+    // ArrayParameterType has no meaningful children for our model; drain to End.
+    ctx.skip_element(start)?;
+    Ok(t)
 }
 
 // ── ArgumentType dispatch ────────────────────────────────────────────────────
