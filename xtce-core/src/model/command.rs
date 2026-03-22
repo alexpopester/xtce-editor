@@ -141,6 +141,45 @@ impl ArgumentType {
             ArgumentType::Array(t) => &t.name,
         }
     }
+
+    pub fn set_name(&mut self, name: String) {
+        match self {
+            ArgumentType::Integer(t) => t.name = name,
+            ArgumentType::Float(t) => t.name = name,
+            ArgumentType::Enumerated(t) => t.name = name,
+            ArgumentType::Boolean(t) => t.name = name,
+            ArgumentType::String(t) => t.name = name,
+            ArgumentType::Binary(t) => t.name = name,
+            ArgumentType::Aggregate(t) => t.name = name,
+            ArgumentType::Array(t) => t.name = name,
+        }
+    }
+
+    pub fn short_description(&self) -> Option<&str> {
+        match self {
+            ArgumentType::Integer(t) => t.short_description.as_deref(),
+            ArgumentType::Float(t) => t.short_description.as_deref(),
+            ArgumentType::Enumerated(t) => t.short_description.as_deref(),
+            ArgumentType::Boolean(t) => t.short_description.as_deref(),
+            ArgumentType::String(t) => t.short_description.as_deref(),
+            ArgumentType::Binary(t) => t.short_description.as_deref(),
+            ArgumentType::Aggregate(t) => t.short_description.as_deref(),
+            ArgumentType::Array(t) => t.short_description.as_deref(),
+        }
+    }
+
+    pub fn set_short_description(&mut self, desc: Option<String>) {
+        match self {
+            ArgumentType::Integer(t) => t.short_description = desc,
+            ArgumentType::Float(t) => t.short_description = desc,
+            ArgumentType::Enumerated(t) => t.short_description = desc,
+            ArgumentType::Boolean(t) => t.short_description = desc,
+            ArgumentType::String(t) => t.short_description = desc,
+            ArgumentType::Binary(t) => t.short_description = desc,
+            ArgumentType::Aggregate(t) => t.short_description = desc,
+            ArgumentType::Array(t) => t.short_description = desc,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

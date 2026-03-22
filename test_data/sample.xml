@@ -1,0 +1,271 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  sample.xml — realistic XTCE v1.2 test database for xtce-editor development.
+
+  Structure:
+    SampleMission (root)
+      TelemetryMetaData
+        ParameterTypes: UINT8, UINT16, UINT32, FLOAT32, BOOL, ModeEnum
+        Parameters: APID, SeqCount, DataLength, Mode, Uptime,
+                    BattVoltage, CpuLoad, SafeFlag
+        Containers: CCSDSPrimaryHeader (abstract base), HkPacket, SciPacket
+      CommandMetaData
+        ArgumentTypes: CmdUINT8, CmdUINT16, ModeArg
+        MetaCommands: Noop, SetMode, SetParam
+      SpaceSystem: Payloads
+        ParameterTypes: SensorReading
+        Parameters: Flux, InstrumentStatus  (InstrumentStatus refs parent UINT8)
+        Containers: SensorPacket  (extends parent CCSDSPrimaryHeader)
+-->
+<SpaceSystem name="SampleMission">
+
+  <Header version="1.0"
+          date="2026-03-22"
+          classification="Unclassified"
+          classificationInstructions="No restrictions"
+          validationStatus="Working">
+    <AuthorSet>
+      <AuthorInformation name="Flight Operations Team" role="author"/>
+      <AuthorInformation name="Payload Systems" role="reviewer"/>
+    </AuthorSet>
+    <NoteSet>
+      <Note>Sample XTCE database for xtce-editor TUI development and testing.</Note>
+      <Note>Packet structures follow CCSDS Space Packet Protocol.</Note>
+    </NoteSet>
+  </Header>
+
+  <TelemetryMetaData>
+
+    <ParameterTypeSet>
+
+      <IntegerParameterType name="UINT8" shortDescription="8-bit unsigned integer">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <IntegerParameterType name="UINT16" shortDescription="16-bit unsigned integer">
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <IntegerParameterType name="UINT32" shortDescription="32-bit unsigned integer">
+        <IntegerDataEncoding sizeInBits="32" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <FloatParameterType name="FLOAT32" shortDescription="32-bit IEEE 754 float">
+        <FloatDataEncoding sizeInBits="32" encoding="IEEE754_1985"/>
+      </FloatParameterType>
+
+      <BooleanParameterType name="BOOL"
+                            shortDescription="1-bit boolean flag"
+                            oneStringValue="true"
+                            zeroStringValue="false">
+        <IntegerDataEncoding sizeInBits="1" encoding="unsigned"/>
+      </BooleanParameterType>
+
+      <EnumeratedParameterType name="ModeEnum"
+                               shortDescription="Spacecraft operating mode">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="SAFE" shortDescription="Safe mode — minimal ops"/>
+          <Enumeration value="1" label="NOMINAL" shortDescription="Normal operations"/>
+          <Enumeration value="2" label="SCIENCE" shortDescription="Full science payload active"/>
+          <Enumeration value="3" label="SAFE_HOLD" shortDescription="Safe hold — awaiting ground command"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+    </ParameterTypeSet>
+
+    <ParameterSet>
+      <!-- CCSDS primary header fields -->
+      <Parameter name="APID"
+                 parameterTypeRef="UINT16"
+                 shortDescription="Application Process Identifier"/>
+      <Parameter name="SeqCount"
+                 parameterTypeRef="UINT16"
+                 shortDescription="Packet sequence count (0–16383)"/>
+      <Parameter name="DataLength"
+                 parameterTypeRef="UINT16"
+                 shortDescription="Packet data field length minus 1, in bytes"/>
+
+      <!-- Housekeeping payload fields -->
+      <Parameter name="Mode"
+                 parameterTypeRef="ModeEnum"
+                 shortDescription="Current spacecraft operating mode"/>
+      <Parameter name="Uptime"
+                 parameterTypeRef="UINT32"
+                 shortDescription="Mission elapsed time in seconds since last reset"/>
+      <Parameter name="BattVoltage"
+                 parameterTypeRef="FLOAT32"
+                 shortDescription="Battery bus voltage in millivolts"/>
+      <Parameter name="CpuLoad"
+                 parameterTypeRef="UINT8"
+                 shortDescription="CPU utilisation, 0–100 percent"/>
+      <Parameter name="SafeFlag"
+                 parameterTypeRef="BOOL"
+                 shortDescription="True when safe-mode interlock is active"/>
+    </ParameterSet>
+
+    <ContainerSet>
+
+      <!-- Abstract base: every packet starts with a 3-field CCSDS primary header (48 bits) -->
+      <SequenceContainer name="CCSDSPrimaryHeader"
+                         abstract="true"
+                         shortDescription="CCSDS Space Packet primary header (48 bits)">
+        <EntryList>
+          <ParameterRefEntry parameterRef="APID"/>
+          <ParameterRefEntry parameterRef="SeqCount"/>
+          <ParameterRefEntry parameterRef="DataLength"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- Housekeeping packet (APID 100) -->
+      <SequenceContainer name="HkPacket"
+                         shortDescription="Housekeeping telemetry packet — APID 100">
+        <BaseContainer containerRef="CCSDSPrimaryHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="100" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="Mode"/>
+          <ParameterRefEntry parameterRef="Uptime"/>
+          <ParameterRefEntry parameterRef="BattVoltage"/>
+          <ParameterRefEntry parameterRef="CpuLoad"/>
+          <ParameterRefEntry parameterRef="SafeFlag"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- Science packet (APID 200) — minimal payload, just a timestamp -->
+      <SequenceContainer name="SciPacket"
+                         shortDescription="Science data packet — APID 200">
+        <BaseContainer containerRef="CCSDSPrimaryHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="200" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="Uptime"/>
+        </EntryList>
+      </SequenceContainer>
+
+    </ContainerSet>
+
+  </TelemetryMetaData>
+
+  <CommandMetaData>
+
+    <ArgumentTypeSet>
+
+      <IntegerArgumentType name="CmdUINT8"
+                           shortDescription="8-bit unsigned command argument">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+      </IntegerArgumentType>
+
+      <IntegerArgumentType name="CmdUINT16"
+                           shortDescription="16-bit unsigned command argument">
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+      </IntegerArgumentType>
+
+      <EnumeratedArgumentType name="ModeArg"
+                              shortDescription="Target operating mode for SetMode command">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="1" label="NOMINAL"/>
+          <Enumeration value="2" label="SCIENCE"/>
+          <Enumeration value="3" label="SAFE_HOLD"/>
+        </EnumerationList>
+      </EnumeratedArgumentType>
+
+    </ArgumentTypeSet>
+
+    <MetaCommandSet>
+
+      <!-- No-op: empty packet -->
+      <MetaCommand name="Noop" shortDescription="No-operation — keep-alive ping">
+        <CommandContainer name="NoopContainer">
+          <EntryList/>
+        </CommandContainer>
+      </MetaCommand>
+
+      <!-- Mode change -->
+      <MetaCommand name="SetMode" shortDescription="Command the spacecraft to a new operating mode">
+        <ArgumentList>
+          <Argument name="newMode"
+                    argumentTypeRef="ModeArg"
+                    shortDescription="Desired target mode"/>
+        </ArgumentList>
+        <CommandContainer name="SetModeContainer">
+          <EntryList>
+            <ArgumentRefEntry argumentRef="newMode"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+
+      <!-- Generic parameter set -->
+      <MetaCommand name="SetParam"
+                   shortDescription="Set an onboard parameter by ID and 8-bit value">
+        <ArgumentList>
+          <Argument name="paramId"
+                    argumentTypeRef="CmdUINT16"
+                    shortDescription="Onboard parameter identifier"/>
+          <Argument name="value"
+                    argumentTypeRef="CmdUINT8"
+                    shortDescription="New 8-bit value to write"
+                    initialValue="0"/>
+        </ArgumentList>
+        <CommandContainer name="SetParamContainer">
+          <EntryList>
+            <ArgumentRefEntry argumentRef="paramId"/>
+            <ArgumentRefEntry argumentRef="value"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+
+    </MetaCommandSet>
+
+  </CommandMetaData>
+
+  <!-- Child SpaceSystem: instrument payload definitions.
+       References UINT8 and CCSDSPrimaryHeader from the parent scope. -->
+  <SpaceSystem name="Payloads"
+               shortDescription="Science instrument telemetry and command definitions">
+
+    <TelemetryMetaData>
+
+      <ParameterTypeSet>
+        <FloatParameterType name="SensorReading"
+                            shortDescription="Calibrated instrument flux reading">
+          <FloatDataEncoding sizeInBits="32" encoding="IEEE754_1985"/>
+        </FloatParameterType>
+      </ParameterTypeSet>
+
+      <ParameterSet>
+        <Parameter name="Flux"
+                   parameterTypeRef="SensorReading"
+                   shortDescription="Primary instrument flux (W/m²)"/>
+        <!-- InstrumentStatus references UINT8 from the parent SpaceSystem scope -->
+        <Parameter name="InstrumentStatus"
+                   parameterTypeRef="UINT8"
+                   shortDescription="Instrument health status byte"/>
+      </ParameterSet>
+
+      <ContainerSet>
+        <!-- SensorPacket extends CCSDSPrimaryHeader from the parent scope (APID 300) -->
+        <SequenceContainer name="SensorPacket"
+                           shortDescription="Instrument sensor data packet — APID 300">
+          <BaseContainer containerRef="CCSDSPrimaryHeader">
+            <RestrictionCriteria>
+              <Comparison parameterRef="APID" value="300" comparisonOperator="=="/>
+            </RestrictionCriteria>
+          </BaseContainer>
+          <EntryList>
+            <ParameterRefEntry parameterRef="Flux"/>
+            <ParameterRefEntry parameterRef="InstrumentStatus"/>
+          </EntryList>
+        </SequenceContainer>
+      </ContainerSet>
+
+    </TelemetryMetaData>
+
+  </SpaceSystem>
+
+</SpaceSystem>

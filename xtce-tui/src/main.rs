@@ -53,7 +53,9 @@ fn run(app: &mut App, terminal: &mut tui::Ratatui) -> std::io::Result<()> {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
-            let action = if app.search_mode {
+            let action = if app.edit_state.is_some() {
+                event::edit_key_to_action(key)
+            } else if app.search_mode {
                 event::search_key_to_action(key)
             } else {
                 event::key_to_action(key)

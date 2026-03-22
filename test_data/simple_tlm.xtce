@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xtce:SpaceSystem xmlns:xtce="http://www.omg.org/spec/XTCE/20180204" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.omg.org/spec/XTCE/20180204 https://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd" name="SimpleTestSatellite" shortDescription="A simple XTCE v1.2 test definition file">
+    <xtce:Header version="1.0" date="2026-03-21" author="Gemini" />
+    <xtce:TelemetryMetaData>
+        <xtce:ParameterTypeSet>
+            <xtce:IntegerParameterType name="UInt16Type" signed="false">
+                <xtce:UnitSet>
+                    <xtce:Unit>V</xtce:Unit>
+                </xtce:UnitSet>
+                <xtce:IntegerDataEncoding sizeInBits="16" encoding="unsigned" />
+            </xtce:IntegerParameterType>
+            <xtce:FloatParameterType name="Float32Type">
+                <xtce:UnitSet>
+                    <xtce:Unit>degC</xtce:Unit>
+                </xtce:UnitSet>
+                <xtce:FloatDataEncoding sizeInBits="32" encoding="IEEE754_1985" />
+            </xtce:FloatParameterType>
+        </xtce:ParameterTypeSet>
+        <xtce:ParameterSet>
+            <xtce:Parameter name="BatteryVoltage" parameterTypeRef="UInt16Type" shortDescription="Main Bus Voltage" />
+            <xtce:Parameter name="PanelTemperature" parameterTypeRef="Float32Type" shortDescription="Solar Panel Temperature" />
+        </xtce:ParameterSet>
+        <xtce:ContainerSet>
+            <xtce:SequenceContainer name="HealthAndStatusPacket" shortDescription="Basic HK packet">
+                <xtce:EntryList>
+                    <xtce:ParameterRefEntry parameterRef="BatteryVoltage" />
+                    <xtce:ParameterRefEntry parameterRef="PanelTemperature" />
+                </xtce:EntryList>
+            </xtce:SequenceContainer>
+        </xtce:ContainerSet>
+    </xtce:TelemetryMetaData>
+</xtce:SpaceSystem>

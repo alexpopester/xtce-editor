@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xtce:SpaceSystem xmlns:xtce="http://www.omg.org/spec/XTCE/20180204" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.omg.org/spec/XTCE/20180204 https://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd" name="AdvancedSat" shortDescription="XTCE showing inheritance, commanding, and complex types">
+    <xtce:Header version="1.2" date="2026-03-21" author="Gemini" />
+    <xtce:TelemetryMetaData>
+        <xtce:ParameterTypeSet>
+            <xtce:IntegerParameterType name="ApidType" signed="false">
+                <xtce:IntegerDataEncoding sizeInBits="11" encoding="unsigned" />
+            </xtce:IntegerParameterType>
+            <xtce:EnumeratedParameterType name="OpStateType">
+                <xtce:EnumerationList>
+                    <xtce:Enumeration value="0" label="BOOT" />
+                    <xtce:Enumeration value="1" label="NOMINAL" />
+                    <xtce:Enumeration value="2" label="SAFE_MODE" />
+                </xtce:EnumerationList>
+                <xtce:IntegerDataEncoding sizeInBits="2" encoding="unsigned" />
+            </xtce:EnumeratedParameterType>
+            <xtce:StringParameterType name="LogMessageType">
+                <xtce:StringDataEncoding>
+                    <xtce:SizeInBits>
+                        <xtce:FixedValue>256</xtce:FixedValue> </xtce:SizeInBits>
+                </xtce:StringDataEncoding>
+            </xtce:StringParameterType>
+        </xtce:ParameterTypeSet>
+        <xtce:ParameterSet>
+            <xtce:Parameter name="APID" parameterTypeRef="ApidType" shortDescription="Application Process ID" />
+            <xtce:Parameter name="SatelliteState" parameterTypeRef="OpStateType" />
+            <xtce:Parameter name="LastEventMsg" parameterTypeRef="LogMessageType" />
+        </xtce:ParameterSet>
+        <xtce:ContainerSet>
+            <xtce:SequenceContainer name="CCSDS_SpacePacket">
+                <xtce:EntryList>
+                    <xtce:ParameterRefEntry parameterRef="APID" />
+                </xtce:EntryList>
+            </xtce:SequenceContainer>
+            <xtce:SequenceContainer name="SystemStatusPacket">
+                <xtce:BaseContainer containerRef="CCSDS_SpacePacket">
+                    <xtce:RestrictionCriteria>
+                        <xtce:Comparison parameterRef="APID" value="104" useCalibratedValue="false" />
+                    </xtce:RestrictionCriteria>
+                </xtce:BaseContainer>
+                <xtce:EntryList>
+                    <xtce:ParameterRefEntry parameterRef="SatelliteState" />
+                    <xtce:ParameterRefEntry parameterRef="LastEventMsg" />
+                </xtce:EntryList>
+            </xtce:SequenceContainer>
+        </xtce:ContainerSet>
+    </xtce:TelemetryMetaData>
+    <xtce:CommandMetaData>
+        <xtce:ArgumentTypeSet>
+            <xtce:EnumeratedArgumentType name="TargetSubsystemType">
+                <xtce:EnumerationList>
+                    <xtce:Enumeration value="1" label="PAYLOAD" />
+                    <xtce:Enumeration value="2" label="COMMS" />
+                    <xtce:Enumeration value="3" label="ADCS" />
+                </xtce:EnumerationList>
+                <xtce:IntegerDataEncoding sizeInBits="8" encoding="unsigned" />
+            </xtce:EnumeratedArgumentType>
+        </xtce:ArgumentTypeSet>
+        <xtce:MetaCommandSet>
+            <xtce:MetaCommand name="PowerCycleSubsystem" shortDescription="Reboots a specific subsystem">
+                <xtce:ArgumentList>
+                    <xtce:Argument name="Target" argumentTypeRef="TargetSubsystemType" />
+                </xtce:ArgumentList>
+                <xtce:CommandContainer name="PowerCycleCmdContainer">
+                    <xtce:EntryList>
+                        <xtce:ArgumentRefEntry argumentRef="Target" />
+                    </xtce:EntryList>
+                </xtce:CommandContainer>
+            </xtce:MetaCommand>
+        </xtce:MetaCommandSet>
+    </xtce:CommandMetaData>
+</xtce:SpaceSystem>

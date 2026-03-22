@@ -20,6 +20,7 @@ use ratatui::{
 use xtce_core::ValidationError;
 
 use crate::app::{App, Focus};
+use crate::event::EditField;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Top-level render entry point
@@ -156,6 +157,19 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
 
 fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     let mut spans = Vec::new();
+
+    if let Some(edit) = &app.edit_state {
+        let label = match edit.field {
+            EditField::Name => "Rename",
+            EditField::ShortDescription => "Description",
+        };
+        spans.push(Span::styled(format!(" {}: ", label), theme::section_header()));
+        spans.push(Span::styled(edit.buffer.clone(), theme::detail_value()));
+        spans.push(Span::styled("_", theme::dim()));
+        spans.push(Span::styled("  Enter:Commit  Esc:Cancel", theme::dim()));
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
 
     if app.search_mode {
         // Search prompt: /query_  [x/y]  hints
@@ -303,6 +317,10 @@ fn render_help_overlay(frame: &mut Frame) {
         ("", ""),
         ("Panels", ""),
         ("  Tab", "Cycle focus"),
+        ("", ""),
+        ("Edit (tree focus)", ""),
+        ("  i", "Rename selected item"),
+        ("  C", "Edit description"),
         ("", ""),
         ("File", ""),
         ("  r", "Reload from disk"),

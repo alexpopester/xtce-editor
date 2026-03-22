@@ -9,6 +9,15 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+/// The field being edited in an active edit prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditField {
+    /// The item's name (also its map key — renames update references).
+    Name,
+    /// The item's short, one-line description.
+    ShortDescription,
+}
+
 /// All actions the application understands.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -52,6 +61,16 @@ pub enum Action {
     SearchExit,
     /// Save the current SpaceSystem to disk.
     Save,
+    /// Open an inline edit prompt for the given field on the selected node.
+    EditStart(EditField),
+    /// Append a character to the edit buffer (only dispatched in edit mode).
+    EditChar(char),
+    /// Delete the last character from the edit buffer.
+    EditBackspace,
+    /// Commit the edit buffer to the model.
+    EditCommit,
+    /// Discard the edit buffer and close the prompt.
+    EditCancel,
 }
 
 /// Map a raw crossterm [`KeyEvent`] to an [`Action`] in normal mode.
@@ -79,6 +98,9 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Left, _) | (KeyCode::Char('h'), _) => Some(Action::Collapse),
         // Panel management
         (KeyCode::Tab, _) => Some(Action::FocusNext),
+        // Editing
+        (KeyCode::Char('i'), _) => Some(Action::EditStart(EditField::Name)),
+        (KeyCode::Char('C'), _) => Some(Action::EditStart(EditField::ShortDescription)),
         // File operations
         (KeyCode::Char('r'), _) => Some(Action::Reload),
         (KeyCode::Char('s'), _) | (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
@@ -92,6 +114,22 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
         (KeyCode::Esc, _) => Some(Action::CloseOverlay),
+        _ => None,
+    }
+}
+
+/// Map a raw crossterm [`KeyEvent`] to an [`Action`] while an edit prompt is open.
+pub fn edit_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::EditCancel),
+        (KeyCode::Enter, _) => Some(Action::EditCommit),
+        (KeyCode::Backspace, _) => Some(Action::EditBackspace),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::EditChar(c))
+        }
         _ => None,
     }
 }

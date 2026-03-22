@@ -91,6 +91,19 @@ impl ParameterType {
         }
     }
 
+    pub fn set_name(&mut self, name: String) {
+        match self {
+            ParameterType::Integer(t) => t.name = name,
+            ParameterType::Float(t) => t.name = name,
+            ParameterType::Enumerated(t) => t.name = name,
+            ParameterType::Boolean(t) => t.name = name,
+            ParameterType::String(t) => t.name = name,
+            ParameterType::Binary(t) => t.name = name,
+            ParameterType::Aggregate(t) => t.name = name,
+            ParameterType::Array(t) => t.name = name,
+        }
+    }
+
     pub fn short_description(&self) -> Option<&str> {
         match self {
             ParameterType::Integer(t) => t.short_description.as_deref(),
@@ -101,6 +114,19 @@ impl ParameterType {
             ParameterType::Binary(t) => t.short_description.as_deref(),
             ParameterType::Aggregate(t) => t.short_description.as_deref(),
             ParameterType::Array(t) => t.short_description.as_deref(),
+        }
+    }
+
+    pub fn set_short_description(&mut self, desc: Option<String>) {
+        match self {
+            ParameterType::Integer(t) => t.short_description = desc,
+            ParameterType::Float(t) => t.short_description = desc,
+            ParameterType::Enumerated(t) => t.short_description = desc,
+            ParameterType::Boolean(t) => t.short_description = desc,
+            ParameterType::String(t) => t.short_description = desc,
+            ParameterType::Binary(t) => t.short_description = desc,
+            ParameterType::Aggregate(t) => t.short_description = desc,
+            ParameterType::Array(t) => t.short_description = desc,
         }
     }
 }
