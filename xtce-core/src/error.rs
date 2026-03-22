@@ -19,6 +19,9 @@ pub enum ParseError {
 
     #[error("unexpected end of document while expecting {expected}")]
     UnexpectedEof { expected: &'static str },
+
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 #[derive(Debug, Error)]
