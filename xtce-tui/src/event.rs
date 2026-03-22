@@ -111,6 +111,35 @@ pub enum Action {
     DeleteConfirm,
     /// Cancel deletion.
     DeleteCancel,
+    // Scalar field toggles
+    ToggleSigned,
+    ToggleAbstract,
+    CycleDataSource,
+    // Generic picker (ChangeTypeRef and SetBase)
+    ChangeTypeRefStart,
+    SetBaseStart,
+    PickerMoveUp,
+    PickerMoveDown,
+    PickerConfirm,
+    PickerChar(char),
+    PickerBackspace,
+    PickerCancel,
+    // Encoding wizard
+    EncodingStart,
+    EncodingMoveUp,
+    EncodingMoveDown,
+    EncodingConfirm,
+    EncodingChar(char),
+    EncodingBackspace,
+    EncodingCancel,
+    // MetaCommand argument management
+    ArgAddStart,
+    ArgRemoveLast,
+    // Enumeration entry editing
+    EnumEntryConfirm,
+    EnumEntryChar(char),
+    EnumEntryBackspace,
+    EnumEntryCancel,
 }
 
 /// Map a raw crossterm [`KeyEvent`] to an [`Action`] in normal mode.
@@ -155,6 +184,14 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('d'), _) => Some(Action::DeleteStart),
         (KeyCode::Char('A'), _) => Some(Action::EntryAddStart),
         (KeyCode::Char('x'), _) => Some(Action::EntryRemoveLast),
+        (KeyCode::Char('t'), _) => Some(Action::ChangeTypeRefStart),
+        (KeyCode::Char('b'), _) => Some(Action::SetBaseStart),
+        (KeyCode::Char('E'), _) => Some(Action::EncodingStart),
+        (KeyCode::Char('S'), _) => Some(Action::ToggleSigned),
+        (KeyCode::Char('B'), _) => Some(Action::ToggleAbstract),
+        (KeyCode::Char('D'), _) => Some(Action::CycleDataSource),
+        (KeyCode::Char('g'), _) => Some(Action::ArgAddStart),
+        (KeyCode::Char('G'), _) => Some(Action::ArgRemoveLast),
         // Overlays
         (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
@@ -235,6 +272,55 @@ pub fn reload_confirm_key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
         (KeyCode::Char('y'), _) => Some(Action::ReloadConfirm),
         (KeyCode::Char('n'), _) | (KeyCode::Esc, _) => Some(Action::ReloadCancel),
+        _ => None,
+    }
+}
+
+pub fn picker_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::PickerCancel),
+        (KeyCode::Enter, _) => Some(Action::PickerConfirm),
+        (KeyCode::Backspace, _) => Some(Action::PickerBackspace),
+        (KeyCode::Up, _) => Some(Action::PickerMoveUp),
+        (KeyCode::Down, _) => Some(Action::PickerMoveDown),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::PickerChar(c))
+        }
+        _ => None,
+    }
+}
+
+pub fn encoding_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::EncodingCancel),
+        (KeyCode::Enter, _) => Some(Action::EncodingConfirm),
+        (KeyCode::Backspace, _) => Some(Action::EncodingBackspace),
+        (KeyCode::Up, _) => Some(Action::EncodingMoveUp),
+        (KeyCode::Down, _) => Some(Action::EncodingMoveDown),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::EncodingChar(c))
+        }
+        _ => None,
+    }
+}
+
+pub fn enum_entry_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::EnumEntryCancel),
+        (KeyCode::Enter, _) => Some(Action::EnumEntryConfirm),
+        (KeyCode::Backspace, _) => Some(Action::EnumEntryBackspace),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::EnumEntryChar(c))
+        }
         _ => None,
     }
 }

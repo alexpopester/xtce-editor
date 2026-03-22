@@ -129,6 +129,19 @@ impl ParameterType {
             ParameterType::Array(t) => t.short_description = desc,
         }
     }
+
+    pub fn set_base_type(&mut self, base: Option<String>) {
+        match self {
+            ParameterType::Integer(t) => t.base_type = base,
+            ParameterType::Float(t) => t.base_type = base,
+            ParameterType::Enumerated(t) => t.base_type = base,
+            ParameterType::Boolean(t) => t.base_type = base,
+            ParameterType::String(t) => t.base_type = base,
+            ParameterType::Binary(t) => t.base_type = base,
+            ParameterType::Aggregate(t) => t.base_type = base,
+            ParameterType::Array(t) => t.base_type = base,
+        }
+    }
 }
 
 // ── Common fields shared by all parameter types ─────────────────────────────

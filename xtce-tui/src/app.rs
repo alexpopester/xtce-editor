@@ -81,6 +81,7 @@ pub enum CreateKind {
     ArgumentType,
     MetaCommand,
     SpaceSystem,
+    Argument,
 }
 
 impl CreateKind {
@@ -92,6 +93,7 @@ impl CreateKind {
             CreateKind::ArgumentType  => "ArgumentType",
             CreateKind::MetaCommand   => "MetaCommand",
             CreateKind::SpaceSystem   => "SpaceSystem",
+            CreateKind::Argument      => "Argument",
         }
     }
 }
@@ -132,6 +134,7 @@ pub struct EntryAddState {
 pub struct CreateState {
     pub kind: CreateKind,
     pub target_path: SsPath,
+    pub target_name: Option<String>,
     pub step: CreateStep,
 }
 
@@ -140,6 +143,53 @@ pub struct CreateState {
 pub struct DeleteConfirmState {
     pub node_id: NodeId,
     pub name: String,
+}
+
+// ── Picker state (ChangeTypeRef / SetBase) ────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PickerPurpose {
+    ChangeTypeRef,
+    SetBaseType,
+    SetBaseContainer,
+    SetBaseMetaCommand,
+}
+
+pub struct PickerState {
+    pub purpose: PickerPurpose,
+    pub node_id: NodeId,
+    pub filter: String,
+    pub items: Vec<(String, String)>,
+    pub cursor: usize,
+}
+
+// ── Encoding wizard state ─────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum EncodingStep {
+    IntegerFormatSelect { cursor: usize },
+    IntegerSizePrompt { format_cursor: usize, buffer: String },
+    FloatSizeSelect { cursor: usize },
+}
+
+#[derive(Debug, Clone)]
+pub struct EncodingState {
+    pub node_id: NodeId,
+    pub step: EncodingStep,
+}
+
+// ── Enumeration entry editing state ───────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum EnumEntryStep {
+    ValuePrompt { buffer: String },
+    LabelPrompt { value: i64, buffer: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct EnumEntryState {
+    pub node_id: NodeId,
+    pub step: EnumEntryStep,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -206,6 +256,12 @@ pub struct App {
     pub reload_confirm: bool,
     /// Active entry-add picker, or `None`.
     pub entry_add_state: Option<EntryAddState>,
+    /// Active generic picker overlay (ChangeTypeRef / SetBase), or `None`.
+    pub picker_state: Option<PickerState>,
+    /// Active encoding wizard, or `None`.
+    pub encoding_state: Option<EncodingState>,
+    /// Active enumeration entry editing state, or `None`.
+    pub enum_entry_state: Option<EnumEntryState>,
 }
 
 impl App {
@@ -244,11 +300,54 @@ impl App {
             create_error: None,
             reload_confirm: false,
             entry_add_state: None,
+            picker_state: None,
+            encoding_state: None,
+            enum_entry_state: None,
         }
     }
 
     /// Dispatch an [`Action`] to the appropriate handler.
     pub fn apply_action(&mut self, action: Action) {
+        // Picker (ChangeTypeRef, SetBase)
+        if self.picker_state.is_some() {
+            match action {
+                Action::PickerCancel   => { self.picker_state = None; }
+                Action::PickerConfirm  => self.commit_picker(),
+                Action::PickerMoveUp   => self.picker_move(-1),
+                Action::PickerMoveDown => self.picker_move(1),
+                Action::PickerChar(c)  => self.picker_push_char(c),
+                Action::PickerBackspace => self.picker_pop_char(),
+                _ => {}
+            }
+            return;
+        }
+
+        // Encoding wizard
+        if self.encoding_state.is_some() {
+            match action {
+                Action::EncodingCancel   => { self.encoding_state = None; }
+                Action::EncodingConfirm  => self.encoding_confirm_step(),
+                Action::EncodingMoveUp   => self.encoding_move(-1),
+                Action::EncodingMoveDown => self.encoding_move(1),
+                Action::EncodingChar(c)  => self.encoding_push_char(c),
+                Action::EncodingBackspace => self.encoding_pop_char(),
+                _ => {}
+            }
+            return;
+        }
+
+        // Enumeration entry editing
+        if self.enum_entry_state.is_some() {
+            match action {
+                Action::EnumEntryCancel   => { self.enum_entry_state = None; }
+                Action::EnumEntryConfirm  => self.enum_entry_confirm_step(),
+                Action::EnumEntryChar(c)  => self.enum_entry_push_char(c),
+                Action::EnumEntryBackspace => self.enum_entry_pop_char(),
+                _ => {}
+            }
+            return;
+        }
+
         // Create flow intercepts all input.
         if self.create_state.is_some() {
             match action {
@@ -394,6 +493,14 @@ impl App {
             }
             Action::Save => self.save(),
             Action::EditStart(field) => self.start_edit(field),
+            Action::ChangeTypeRefStart => self.start_change_type_ref(),
+            Action::SetBaseStart       => self.start_set_base(),
+            Action::EncodingStart      => self.start_encoding(),
+            Action::ToggleSigned       => self.toggle_signed(),
+            Action::ToggleAbstract     => self.toggle_abstract(),
+            Action::CycleDataSource    => self.cycle_data_source(),
+            Action::ArgAddStart        => self.start_arg_add(),
+            Action::ArgRemoveLast      => self.remove_last_argument(),
             Action::CreateStart  => self.start_create(),
             Action::DeleteStart  => self.start_delete(),
             Action::EntryAddStart   => self.start_entry_add(),
@@ -406,6 +513,12 @@ impl App {
             Action::ReloadConfirm | Action::ReloadCancel => {}
             Action::EntryAddMoveUp | Action::EntryAddMoveDown | Action::EntryAddConfirm
             | Action::EntryAddChar(_) | Action::EntryAddBackspace | Action::EntryAddCancel => {}
+            Action::PickerMoveUp | Action::PickerMoveDown | Action::PickerConfirm
+            | Action::PickerChar(_) | Action::PickerBackspace | Action::PickerCancel => {}
+            Action::EncodingMoveUp | Action::EncodingMoveDown | Action::EncodingConfirm
+            | Action::EncodingChar(_) | Action::EncodingBackspace | Action::EncodingCancel => {}
+            Action::EnumEntryConfirm | Action::EnumEntryChar(_) | Action::EnumEntryBackspace
+            | Action::EnumEntryCancel => {}
         }
     }
 
@@ -796,7 +909,7 @@ impl App {
             _ => CreateStep::NamePrompt { buffer: String::new(), variant: None },
         };
 
-        self.create_state = Some(CreateState { kind, target_path, step: first_step });
+        self.create_state = Some(CreateState { kind, target_path, target_name: None, step: first_step });
         self.create_error = None;
     }
 
@@ -867,6 +980,7 @@ impl App {
         let Some(cs) = self.create_state.take() else { return };
         let kind = cs.kind;
         let path = cs.target_path;
+        let target_name = cs.target_name;
 
         match cs.step {
             CreateStep::TypeVariantSelect { selector_cursor } => {
@@ -874,6 +988,7 @@ impl App {
                 self.create_state = Some(CreateState {
                     kind,
                     target_path: path,
+                    target_name,
                     step: CreateStep::NamePrompt { buffer: String::new(), variant: Some(variant) },
                 });
             }
@@ -883,32 +998,39 @@ impl App {
                     self.create_state = Some(CreateState {
                         kind,
                         target_path: path,
+                        target_name,
                         step: CreateStep::NamePrompt { buffer, variant },
                     });
                     return;
                 }
-                if self.name_exists(&kind, &path, &name) {
+                if self.name_exists(&kind, &path, &name, target_name.as_deref()) {
                     self.create_error = Some(format!("'{}' already exists", name));
                     self.create_state = Some(CreateState {
                         kind,
                         target_path: path,
+                        target_name,
                         step: CreateStep::NamePrompt { buffer: name, variant },
                     });
                     return;
                 }
                 self.create_error = None;
                 let needs_picker = match &kind {
-                    CreateKind::Parameter => true,
+                    CreateKind::Parameter | CreateKind::Argument => true,
                     CreateKind::ParameterType | CreateKind::ArgumentType => {
                         matches!(variant, Some(TypeVariant::Array))
                     }
                     _ => false,
                 };
+                let picker_kind = match &kind {
+                    CreateKind::Argument => CreateKind::ArgumentType,
+                    other => other.clone(),
+                };
                 if needs_picker {
-                    let items = self.build_picker_items(&kind, &path);
+                    let items = self.build_picker_items(&picker_kind, &path);
                     self.create_state = Some(CreateState {
                         kind,
                         target_path: path,
+                        target_name,
                         step: CreateStep::PickerPrompt {
                             name,
                             variant,
@@ -918,7 +1040,7 @@ impl App {
                         },
                     });
                 } else {
-                    self.commit_create(kind, path, name, variant, None);
+                    self.commit_create(kind, path, name, variant, None, target_name);
                 }
             }
             CreateStep::PickerPrompt { name, variant, filter, items, picker_cursor } => {
@@ -933,6 +1055,7 @@ impl App {
                     self.create_state = Some(CreateState {
                         kind,
                         target_path: path,
+                        target_name,
                         step: CreateStep::PickerPrompt { name, variant, filter, items, picker_cursor },
                     });
                     return;
@@ -940,12 +1063,12 @@ impl App {
                 let idx = picker_cursor.min(filtered.len() - 1);
                 let type_ref = filtered[idx].1.clone();
                 self.create_error = None;
-                self.commit_create(kind, path, name, variant, Some(type_ref));
+                self.commit_create(kind, path, name, variant, Some(type_ref), target_name);
             }
         }
     }
 
-    fn name_exists(&self, kind: &CreateKind, path: &SsPath, name: &str) -> bool {
+    fn name_exists(&self, kind: &CreateKind, path: &SsPath, name: &str, target_name: Option<&str>) -> bool {
         let Some(ss) = get_ss(&self.space_system, path) else { return false };
         match kind {
             CreateKind::SpaceSystem => ss.sub_systems.iter().any(|s| s.name == name),
@@ -973,6 +1096,14 @@ impl App {
                 .command
                 .as_ref()
                 .map(|cmd| cmd.meta_commands.contains_key(name))
+                .unwrap_or(false),
+            CreateKind::Argument => target_name
+                .and_then(|mc_name| {
+                    get_ss(&self.space_system, path)
+                        .and_then(|ss| ss.command.as_ref())
+                        .and_then(|cmd| cmd.meta_commands.get(mc_name))
+                        .map(|mc| mc.argument_list.iter().any(|a| a.name == name))
+                })
                 .unwrap_or(false),
         }
     }
@@ -1021,6 +1152,7 @@ impl App {
         name: String,
         variant: Option<TypeVariant>,
         type_ref: Option<String>,
+        target_name: Option<String>,
     ) {
         let new_id: NodeId = match kind {
             CreateKind::SpaceSystem => {
@@ -1083,6 +1215,17 @@ impl App {
                         .insert(name.clone(), mc);
                 }
                 NodeId::CmdMetaCommand(path, name)
+            }
+            CreateKind::Argument => {
+                let type_ref = type_ref.unwrap_or_default();
+                let mc_name = target_name.unwrap_or_default();
+                if let Some(mc) = get_ss_mut(&mut self.space_system, &path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.meta_commands.get_mut(mc_name.as_str()))
+                {
+                    mc.argument_list.push(xtce_core::model::command::Argument::new(name.clone(), type_ref));
+                }
+                NodeId::CmdMetaCommand(path, mc_name)
             }
         };
 
@@ -1171,6 +1314,30 @@ impl App {
         }
         let Some(node) = self.tree.get(self.cursor) else { return };
         let node_id = node.node_id.clone();
+
+        // Handle Enumerated type → enum entry flow
+        use xtce_core::model::telemetry::ParameterType as PT;
+        use xtce_core::model::command::ArgumentType as AT;
+        let is_enum = match &node_id {
+            NodeId::TmParameterType(path, name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_ref())
+                .and_then(|tm| tm.parameter_types.get(name.as_str()))
+                .map(|pt| matches!(pt, PT::Enumerated(_)))
+                .unwrap_or(false),
+            NodeId::CmdArgumentType(path, name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.command.as_ref())
+                .and_then(|cmd| cmd.argument_types.get(name.as_str()))
+                .map(|at| matches!(at, AT::Enumerated(_)))
+                .unwrap_or(false),
+            _ => false,
+        };
+        if is_enum {
+            self.enum_entry_state = Some(EnumEntryState {
+                node_id,
+                step: EnumEntryStep::ValuePrompt { buffer: String::new() },
+            });
+            return;
+        }
 
         let items = match &node_id {
             NodeId::TmContainer(path, _) => {
@@ -1320,6 +1487,24 @@ impl App {
                     .and_then(|cc| cc.entry_list.pop())
                     .is_some()
             }
+            NodeId::TmParameterType(path, name) => {
+                use xtce_core::model::telemetry::ParameterType;
+                if let Some(ParameterType::Enumerated(t)) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.parameter_types.get_mut(name.as_str()))
+                {
+                    t.enumeration_list.pop().is_some()
+                } else { false }
+            }
+            NodeId::CmdArgumentType(path, name) => {
+                use xtce_core::model::command::ArgumentType;
+                if let Some(ArgumentType::Enumerated(t)) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.argument_types.get_mut(name.as_str()))
+                {
+                    t.enumeration_list.pop().is_some()
+                } else { false }
+            }
             _ => false,
         };
 
@@ -1328,6 +1513,579 @@ impl App {
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
             self.rebuild_tree();
         }
+    }
+
+    // ── Picker (ChangeTypeRef / SetBase) ──────────────────────────────────────
+
+    fn start_change_type_ref(&mut self) {
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let NodeId::TmParameter(path, _) = &node.node_id else { return };
+        let path = path.clone();
+        let items = self.build_picker_items(&CreateKind::Parameter, &path);
+        let node_id = node.node_id.clone();
+        self.picker_state = Some(PickerState {
+            purpose: PickerPurpose::ChangeTypeRef,
+            node_id,
+            filter: String::new(),
+            items,
+            cursor: 0,
+        });
+    }
+
+    fn start_set_base(&mut self) {
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let node_id = node.node_id.clone();
+
+        let (purpose, items) = match &node_id {
+            NodeId::TmParameterType(path, self_name) => {
+                let self_name = self_name.clone();
+                let mut items = self.build_picker_items(&CreateKind::ParameterType, path);
+                items.retain(|(_, v)| *v != self_name);
+                (PickerPurpose::SetBaseType, items)
+            }
+            NodeId::CmdArgumentType(path, self_name) => {
+                let self_name = self_name.clone();
+                let mut items = self.build_picker_items(&CreateKind::ArgumentType, path);
+                items.retain(|(_, v)| *v != self_name);
+                (PickerPurpose::SetBaseType, items)
+            }
+            NodeId::TmContainer(path, self_name) => {
+                let self_name = self_name.clone();
+                let mut items = Vec::new();
+                if let Some(ss) = get_ss(&self.space_system, path) {
+                    if let Some(tm) = &ss.telemetry {
+                        for (n, _) in &tm.containers {
+                            if *n != self_name {
+                                items.push((n.clone(), n.clone()));
+                            }
+                        }
+                    }
+                }
+                (PickerPurpose::SetBaseContainer, items)
+            }
+            NodeId::CmdMetaCommand(path, self_name) => {
+                let self_name = self_name.clone();
+                let mut items = Vec::new();
+                if let Some(ss) = get_ss(&self.space_system, path) {
+                    if let Some(cmd) = &ss.command {
+                        for (n, _) in &cmd.meta_commands {
+                            if *n != self_name {
+                                items.push((n.clone(), n.clone()));
+                            }
+                        }
+                    }
+                }
+                (PickerPurpose::SetBaseMetaCommand, items)
+            }
+            _ => return,
+        };
+
+        self.picker_state = Some(PickerState {
+            purpose,
+            node_id,
+            filter: String::new(),
+            items,
+            cursor: 0,
+        });
+    }
+
+    fn picker_move(&mut self, delta: i64) {
+        let Some(ps) = self.picker_state.as_mut() else { return };
+        let count = filtered_count(&ps.items, &ps.filter);
+        if count > 0 {
+            let new = (ps.cursor as i64 + delta).clamp(0, count as i64 - 1) as usize;
+            ps.cursor = new;
+        }
+    }
+
+    fn picker_push_char(&mut self, c: char) {
+        let Some(ps) = self.picker_state.as_mut() else { return };
+        if c == 'j' {
+            let count = filtered_count(&ps.items, &ps.filter);
+            if count > 0 { ps.cursor = (ps.cursor + 1).min(count - 1); }
+        } else if c == 'k' {
+            ps.cursor = ps.cursor.saturating_sub(1);
+        } else {
+            ps.filter.push(c);
+            ps.cursor = 0;
+        }
+    }
+
+    fn picker_pop_char(&mut self) {
+        let Some(ps) = self.picker_state.as_mut() else { return };
+        ps.filter.pop();
+        ps.cursor = 0;
+    }
+
+    fn commit_picker(&mut self) {
+        let Some(ps) = self.picker_state.take() else { return };
+        let q = ps.filter.to_lowercase();
+        let filtered: Vec<_> = ps.items.iter()
+            .filter(|(l, _)| q.is_empty() || l.to_lowercase().contains(&q))
+            .collect();
+        if filtered.is_empty() { return; }
+        let idx = ps.cursor.min(filtered.len() - 1);
+        let value = filtered[idx].1.clone();
+
+        match ps.purpose {
+            PickerPurpose::ChangeTypeRef => {
+                if let NodeId::TmParameter(ref path, ref name) = ps.node_id {
+                    if let Some(p) = get_ss_mut(&mut self.space_system, path)
+                        .and_then(|ss| ss.telemetry.as_mut())
+                        .and_then(|tm| tm.parameters.get_mut(name.as_str()))
+                    {
+                        p.parameter_type_ref = value;
+                    }
+                }
+            }
+            PickerPurpose::SetBaseType => {
+                match &ps.node_id {
+                    NodeId::TmParameterType(path, name) => {
+                        if let Some(pt) = get_ss_mut(&mut self.space_system, path)
+                            .and_then(|ss| ss.telemetry.as_mut())
+                            .and_then(|tm| tm.parameter_types.get_mut(name.as_str()))
+                        {
+                            pt.set_base_type(Some(value));
+                        }
+                    }
+                    NodeId::CmdArgumentType(path, name) => {
+                        if let Some(at) = get_ss_mut(&mut self.space_system, path)
+                            .and_then(|ss| ss.command.as_mut())
+                            .and_then(|cmd| cmd.argument_types.get_mut(name.as_str()))
+                        {
+                            at.set_base_type(Some(value));
+                        }
+                    }
+                    _ => return,
+                }
+            }
+            PickerPurpose::SetBaseContainer => {
+                if let NodeId::TmContainer(ref path, ref name) = ps.node_id {
+                    if let Some(c) = get_ss_mut(&mut self.space_system, path)
+                        .and_then(|ss| ss.telemetry.as_mut())
+                        .and_then(|tm| tm.containers.get_mut(name.as_str()))
+                    {
+                        c.base_container = Some(xtce_core::model::container::BaseContainer {
+                            container_ref: value,
+                            restriction_criteria: None,
+                        });
+                    }
+                }
+            }
+            PickerPurpose::SetBaseMetaCommand => {
+                if let NodeId::CmdMetaCommand(ref path, ref name) = ps.node_id {
+                    if let Some(mc) = get_ss_mut(&mut self.space_system, path)
+                        .and_then(|ss| ss.command.as_mut())
+                        .and_then(|cmd| cmd.meta_commands.get_mut(name.as_str()))
+                    {
+                        mc.base_meta_command = Some(value);
+                    }
+                }
+            }
+        }
+
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        self.rebuild_tree();
+    }
+
+    // ── Scalar toggles ────────────────────────────────────────────────────────
+
+    fn toggle_signed(&mut self) {
+        use xtce_core::model::telemetry::ParameterType;
+        use xtce_core::model::command::ArgumentType;
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let changed = match &node.node_id.clone() {
+            NodeId::TmParameterType(path, name) => {
+                if let Some(ParameterType::Integer(t)) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.parameter_types.get_mut(name.as_str()))
+                {
+                    t.signed = !t.signed;
+                    true
+                } else { false }
+            }
+            NodeId::CmdArgumentType(path, name) => {
+                if let Some(ArgumentType::Integer(t)) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.argument_types.get_mut(name.as_str()))
+                {
+                    t.signed = !t.signed;
+                    true
+                } else { false }
+            }
+            _ => false,
+        };
+        if changed {
+            self.dirty = true;
+            self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        }
+    }
+
+    fn toggle_abstract(&mut self) {
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let changed = match &node.node_id.clone() {
+            NodeId::TmContainer(path, name) => {
+                if let Some(c) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.containers.get_mut(name.as_str()))
+                {
+                    c.r#abstract = !c.r#abstract;
+                    true
+                } else { false }
+            }
+            NodeId::CmdMetaCommand(path, name) => {
+                if let Some(mc) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.meta_commands.get_mut(name.as_str()))
+                {
+                    mc.r#abstract = !mc.r#abstract;
+                    true
+                } else { false }
+            }
+            _ => false,
+        };
+        if changed {
+            self.dirty = true;
+            self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        }
+    }
+
+    fn cycle_data_source(&mut self) {
+        use xtce_core::model::telemetry::{DataSource, ParameterProperties};
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let NodeId::TmParameter(path, name) = node.node_id.clone() else { return };
+        let changed = if let Some(p) = get_ss_mut(&mut self.space_system, &path)
+            .and_then(|ss| ss.telemetry.as_mut())
+            .and_then(|tm| tm.parameters.get_mut(name.as_str()))
+        {
+            let props = p.parameter_properties.get_or_insert_with(ParameterProperties::default);
+            props.data_source = Some(match &props.data_source {
+                None | Some(DataSource::Telemetered) => DataSource::Derived,
+                Some(DataSource::Derived)  => DataSource::Constant,
+                Some(DataSource::Constant) => DataSource::Local,
+                Some(DataSource::Local)    => DataSource::Ground,
+                Some(DataSource::Ground)   => DataSource::Telemetered,
+            });
+            true
+        } else { false };
+        if changed {
+            self.dirty = true;
+            self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        }
+    }
+
+    // ── Encoding wizard ───────────────────────────────────────────────────────
+
+    fn start_encoding(&mut self) {
+        use xtce_core::model::telemetry::ParameterType;
+        use xtce_core::model::command::ArgumentType;
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let node_id = node.node_id.clone();
+
+        let is_float = match &node_id {
+            NodeId::TmParameterType(path, name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_ref())
+                .and_then(|tm| tm.parameter_types.get(name.as_str()))
+                .map(|pt| matches!(pt, ParameterType::Float(_)))
+                .unwrap_or(false),
+            NodeId::CmdArgumentType(path, name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.command.as_ref())
+                .and_then(|cmd| cmd.argument_types.get(name.as_str()))
+                .map(|at| matches!(at, ArgumentType::Float(_)))
+                .unwrap_or(false),
+            _ => return,
+        };
+
+        let is_encodable = match &node_id {
+            NodeId::TmParameterType(path, name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_ref())
+                .and_then(|tm| tm.parameter_types.get(name.as_str()))
+                .map(|pt| !matches!(pt, ParameterType::Aggregate(_) | ParameterType::Array(_)))
+                .unwrap_or(false),
+            NodeId::CmdArgumentType(path, name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.command.as_ref())
+                .and_then(|cmd| cmd.argument_types.get(name.as_str()))
+                .map(|at| !matches!(at, ArgumentType::Aggregate(_) | ArgumentType::Array(_)))
+                .unwrap_or(false),
+            _ => false,
+        };
+        if !is_encodable { return; }
+
+        let first_step = if is_float {
+            EncodingStep::FloatSizeSelect { cursor: 0 }
+        } else {
+            EncodingStep::IntegerFormatSelect { cursor: 0 }
+        };
+        self.encoding_state = Some(EncodingState { node_id, step: first_step });
+    }
+
+    fn encoding_move(&mut self, delta: i64) {
+        let Some(es) = self.encoding_state.as_mut() else { return };
+        match &mut es.step {
+            EncodingStep::IntegerFormatSelect { cursor } => {
+                let max = integer_encoding_labels().len() - 1;
+                *cursor = (*cursor as i64 + delta).clamp(0, max as i64) as usize;
+            }
+            EncodingStep::FloatSizeSelect { cursor } => {
+                let max = float_size_labels().len() - 1;
+                *cursor = (*cursor as i64 + delta).clamp(0, max as i64) as usize;
+            }
+            EncodingStep::IntegerSizePrompt { .. } => {}
+        }
+    }
+
+    fn encoding_push_char(&mut self, c: char) {
+        let Some(es) = self.encoding_state.as_mut() else { return };
+        match &mut es.step {
+            EncodingStep::IntegerFormatSelect { cursor } => {
+                let max = integer_encoding_labels().len() - 1;
+                if c == 'j' { *cursor = (*cursor + 1).min(max); }
+                else if c == 'k' { *cursor = cursor.saturating_sub(1); }
+            }
+            EncodingStep::FloatSizeSelect { cursor } => {
+                let max = float_size_labels().len() - 1;
+                if c == 'j' { *cursor = (*cursor + 1).min(max); }
+                else if c == 'k' { *cursor = cursor.saturating_sub(1); }
+            }
+            EncodingStep::IntegerSizePrompt { buffer, .. } => {
+                if c.is_ascii_digit() { buffer.push(c); }
+            }
+        }
+    }
+
+    fn encoding_pop_char(&mut self) {
+        let Some(es) = self.encoding_state.as_mut() else { return };
+        if let EncodingStep::IntegerSizePrompt { buffer, .. } = &mut es.step {
+            buffer.pop();
+        }
+    }
+
+    fn encoding_confirm_step(&mut self) {
+        let Some(es) = self.encoding_state.take() else { return };
+        let node_id = es.node_id;
+        match es.step {
+            EncodingStep::IntegerFormatSelect { cursor } => {
+                self.encoding_state = Some(EncodingState {
+                    node_id,
+                    step: EncodingStep::IntegerSizePrompt { format_cursor: cursor, buffer: String::new() },
+                });
+            }
+            EncodingStep::IntegerSizePrompt { format_cursor, buffer } => {
+                let size: u32 = match buffer.trim().parse::<u32>() {
+                    Ok(v) if v > 0 => v,
+                    _ => {
+                        self.encoding_state = Some(EncodingState {
+                            node_id,
+                            step: EncodingStep::IntegerSizePrompt { format_cursor, buffer },
+                        });
+                        return;
+                    }
+                };
+                let encoding = cursor_to_integer_encoding(format_cursor);
+                self.apply_integer_encoding(&node_id, encoding, size);
+            }
+            EncodingStep::FloatSizeSelect { cursor } => {
+                let size = cursor_to_float_size(cursor);
+                self.apply_float_encoding(&node_id, size);
+            }
+        }
+    }
+
+    fn apply_integer_encoding(
+        &mut self,
+        node_id: &NodeId,
+        encoding: xtce_core::model::types::IntegerEncoding,
+        size_in_bits: u32,
+    ) {
+        use xtce_core::model::types::IntegerDataEncoding;
+        use xtce_core::model::telemetry::ParameterType;
+        use xtce_core::model::command::ArgumentType;
+        let enc = IntegerDataEncoding { size_in_bits, encoding, byte_order: None, default_calibrator: None };
+        match node_id {
+            NodeId::TmParameterType(path, name) => {
+                if let Some(pt) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.parameter_types.get_mut(name.as_str()))
+                {
+                    match pt {
+                        ParameterType::Integer(t)    => t.encoding = Some(enc),
+                        ParameterType::Enumerated(t) => t.encoding = Some(enc),
+                        ParameterType::Boolean(t)    => t.encoding = Some(enc),
+                        _ => return,
+                    }
+                }
+            }
+            NodeId::CmdArgumentType(path, name) => {
+                if let Some(at) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.argument_types.get_mut(name.as_str()))
+                {
+                    match at {
+                        ArgumentType::Integer(t)    => t.encoding = Some(enc),
+                        ArgumentType::Enumerated(t) => t.encoding = Some(enc),
+                        ArgumentType::Boolean(t)    => t.encoding = Some(enc),
+                        _ => return,
+                    }
+                }
+            }
+            _ => return,
+        }
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+    }
+
+    fn apply_float_encoding(
+        &mut self,
+        node_id: &NodeId,
+        size: xtce_core::model::types::FloatSizeInBits,
+    ) {
+        use xtce_core::model::types::{FloatDataEncoding, FloatEncoding};
+        use xtce_core::model::telemetry::ParameterType;
+        use xtce_core::model::command::ArgumentType;
+        let enc = FloatDataEncoding { size_in_bits: size, encoding: FloatEncoding::IEEE754_1985, byte_order: None, default_calibrator: None };
+        match node_id {
+            NodeId::TmParameterType(path, name) => {
+                if let Some(ParameterType::Float(t)) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.parameter_types.get_mut(name.as_str()))
+                {
+                    t.encoding = Some(enc);
+                }
+            }
+            NodeId::CmdArgumentType(path, name) => {
+                if let Some(ArgumentType::Float(t)) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.argument_types.get_mut(name.as_str()))
+                {
+                    t.encoding = Some(enc);
+                }
+            }
+            _ => return,
+        }
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+    }
+
+    // ── MetaCommand argument management ───────────────────────────────────────
+
+    fn start_arg_add(&mut self) {
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let NodeId::CmdMetaCommand(path, mc_name) = node.node_id.clone() else { return };
+        self.create_state = Some(CreateState {
+            kind: CreateKind::Argument,
+            target_path: path,
+            target_name: Some(mc_name),
+            step: CreateStep::NamePrompt { buffer: String::new(), variant: None },
+        });
+        self.create_error = None;
+    }
+
+    fn remove_last_argument(&mut self) {
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let NodeId::CmdMetaCommand(path, mc_name) = node.node_id.clone() else { return };
+        let removed = get_ss_mut(&mut self.space_system, &path)
+            .and_then(|ss| ss.command.as_mut())
+            .and_then(|cmd| cmd.meta_commands.get_mut(mc_name.as_str()))
+            .and_then(|mc| mc.argument_list.pop())
+            .is_some();
+        if removed {
+            self.dirty = true;
+            self.validation_errors = xtce_core::validator::validate(&self.space_system);
+            self.rebuild_tree();
+        }
+    }
+
+    // ── Enumeration entry editing ─────────────────────────────────────────────
+
+    fn enum_entry_confirm_step(&mut self) {
+        let Some(es) = self.enum_entry_state.take() else { return };
+        let node_id = es.node_id;
+        match es.step {
+            EnumEntryStep::ValuePrompt { buffer } => {
+                match buffer.trim().parse::<i64>() {
+                    Ok(value) => {
+                        self.enum_entry_state = Some(EnumEntryState {
+                            node_id,
+                            step: EnumEntryStep::LabelPrompt { value, buffer: String::new() },
+                        });
+                    }
+                    Err(_) => {
+                        self.enum_entry_state = Some(EnumEntryState {
+                            node_id,
+                            step: EnumEntryStep::ValuePrompt { buffer },
+                        });
+                    }
+                }
+            }
+            EnumEntryStep::LabelPrompt { value, buffer } => {
+                let label = buffer.trim().to_string();
+                if label.is_empty() {
+                    self.enum_entry_state = Some(EnumEntryState {
+                        node_id,
+                        step: EnumEntryStep::LabelPrompt { value, buffer },
+                    });
+                    return;
+                }
+                self.commit_enum_entry(&node_id, value, label);
+            }
+        }
+    }
+
+    fn enum_entry_push_char(&mut self, c: char) {
+        let Some(es) = self.enum_entry_state.as_mut() else { return };
+        match &mut es.step {
+            EnumEntryStep::ValuePrompt { buffer } => {
+                if c.is_ascii_digit() || (c == '-' && buffer.is_empty()) {
+                    buffer.push(c);
+                }
+            }
+            EnumEntryStep::LabelPrompt { buffer, .. } => { buffer.push(c); }
+        }
+    }
+
+    fn enum_entry_pop_char(&mut self) {
+        let Some(es) = self.enum_entry_state.as_mut() else { return };
+        match &mut es.step {
+            EnumEntryStep::ValuePrompt { buffer } => { buffer.pop(); }
+            EnumEntryStep::LabelPrompt { buffer, .. } => { buffer.pop(); }
+        }
+    }
+
+    fn commit_enum_entry(&mut self, node_id: &NodeId, value: i64, label: String) {
+        use xtce_core::model::types::ValueEnumeration;
+        use xtce_core::model::telemetry::ParameterType;
+        use xtce_core::model::command::ArgumentType;
+        let entry = ValueEnumeration { value, label, max_value: None, short_description: None };
+        match node_id {
+            NodeId::TmParameterType(path, name) => {
+                if let Some(ParameterType::Enumerated(t)) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.parameter_types.get_mut(name.as_str()))
+                {
+                    t.enumeration_list.push(entry);
+                }
+            }
+            NodeId::CmdArgumentType(path, name) => {
+                if let Some(ArgumentType::Enumerated(t)) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.argument_types.get_mut(name.as_str()))
+                {
+                    t.enumeration_list.push(entry);
+                }
+            }
+            _ => return,
+        }
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
     }
 }
 
@@ -1411,6 +2169,35 @@ fn ancestors_to_expand(node_id: &NodeId) -> Vec<NodeId> {
             v.push(NodeId::CmdMetaCommands(path.clone()));
             v
         }
+    }
+}
+
+pub(crate) fn integer_encoding_labels() -> &'static [&'static str] {
+    &["Unsigned", "Twos Complement", "Sign Magnitude", "Ones Complement", "BCD", "Packed BCD"]
+}
+
+pub(crate) fn float_size_labels() -> &'static [&'static str] {
+    &["32-bit (F32)", "64-bit (F64)", "128-bit (F128)"]
+}
+
+fn cursor_to_integer_encoding(cursor: usize) -> xtce_core::model::types::IntegerEncoding {
+    use xtce_core::model::types::IntegerEncoding;
+    match cursor {
+        1 => IntegerEncoding::TwosComplement,
+        2 => IntegerEncoding::SignMagnitude,
+        3 => IntegerEncoding::OnesComplement,
+        4 => IntegerEncoding::BCD,
+        5 => IntegerEncoding::PackedBCD,
+        _ => IntegerEncoding::Unsigned,
+    }
+}
+
+fn cursor_to_float_size(cursor: usize) -> xtce_core::model::types::FloatSizeInBits {
+    use xtce_core::model::types::FloatSizeInBits;
+    match cursor {
+        1 => FloatSizeInBits::F64,
+        2 => FloatSizeInBits::F128,
+        _ => FloatSizeInBits::F32,
     }
 }
 

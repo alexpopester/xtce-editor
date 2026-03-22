@@ -180,6 +180,19 @@ impl ArgumentType {
             ArgumentType::Array(t) => t.short_description = desc,
         }
     }
+
+    pub fn set_base_type(&mut self, base: Option<String>) {
+        match self {
+            ArgumentType::Integer(t) => t.base_type = base,
+            ArgumentType::Float(t) => t.base_type = base,
+            ArgumentType::Enumerated(t) => t.base_type = base,
+            ArgumentType::Boolean(t) => t.base_type = base,
+            ArgumentType::String(t) => t.base_type = base,
+            ArgumentType::Binary(t) => t.base_type = base,
+            ArgumentType::Aggregate(t) => t.base_type = base,
+            ArgumentType::Array(t) => t.base_type = base,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

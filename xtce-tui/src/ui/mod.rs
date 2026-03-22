@@ -19,7 +19,7 @@ use ratatui::{
 
 use xtce_core::ValidationError;
 
-use crate::app::{App, CreateStep, Focus, TypeVariant};
+use crate::app::{App, CreateStep, Focus, TypeVariant, integer_encoding_labels, float_size_labels};
 use crate::event::EditField;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,6 +69,26 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             _ => "Add entry",
         };
         render_picker_overlay(title, &ea.filter, &ea.items, ea.cursor, frame);
+    }
+    if let Some(ps) = &app.picker_state {
+        let title = match ps.purpose {
+            crate::app::PickerPurpose::ChangeTypeRef      => "Change type reference",
+            crate::app::PickerPurpose::SetBaseType        => "Set base type",
+            crate::app::PickerPurpose::SetBaseContainer   => "Set base container",
+            crate::app::PickerPurpose::SetBaseMetaCommand => "Set base MetaCommand",
+        };
+        render_picker_overlay(title, &ps.filter, &ps.items, ps.cursor, frame);
+    }
+    if let Some(es) = &app.encoding_state {
+        match &es.step {
+            crate::app::EncodingStep::IntegerFormatSelect { cursor } => {
+                render_list_select("Select integer encoding format", integer_encoding_labels(), *cursor, frame);
+            }
+            crate::app::EncodingStep::FloatSizeSelect { cursor } => {
+                render_list_select("Select float size", float_size_labels(), *cursor, frame);
+            }
+            crate::app::EncodingStep::IntegerSizePrompt { .. } => {} // shown in status bar
+        }
     }
 }
 
@@ -177,6 +197,38 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
 fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     let mut spans = Vec::new();
 
+    if let Some(es) = &app.encoding_state {
+        if let crate::app::EncodingStep::IntegerSizePrompt { buffer, .. } = &es.step {
+            spans.push(Span::styled(" Encoding size in bits: ", theme::section_header()));
+            spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+            spans.push(Span::styled("_", theme::dim()));
+            spans.push(Span::styled("  Enter:Confirm  Esc:Cancel", theme::dim()));
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            return;
+        }
+    }
+
+    if let Some(es) = &app.enum_entry_state {
+        match &es.step {
+            crate::app::EnumEntryStep::ValuePrompt { buffer } => {
+                spans.push(Span::styled(" Enumeration value (integer): ", theme::section_header()));
+                spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+                spans.push(Span::styled("_", theme::dim()));
+                spans.push(Span::styled("  Enter:Next  Esc:Cancel", theme::dim()));
+                frame.render_widget(Paragraph::new(Line::from(spans)), area);
+                return;
+            }
+            crate::app::EnumEntryStep::LabelPrompt { value, buffer } => {
+                spans.push(Span::styled(format!(" Label for value {}: ", value), theme::section_header()));
+                spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+                spans.push(Span::styled("_", theme::dim()));
+                spans.push(Span::styled("  Enter:Add  Esc:Cancel", theme::dim()));
+                frame.render_widget(Paragraph::new(Line::from(spans)), area);
+                return;
+            }
+        }
+    }
+
     if app.reload_confirm {
         spans.push(Span::styled(" Reload and discard unsaved changes?", theme::warn()));
         spans.push(Span::styled("  y:Confirm  n/Esc:Cancel", theme::dim()));
@@ -269,27 +321,33 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
 // Overlay renderers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn render_type_variant_select(selector_cursor: usize, frame: &mut Frame) {
-    let area = centered_rect(40, 60, frame.area());
+fn render_list_select(title: &str, labels: &[&str], cursor: usize, frame: &mut Frame) {
+    let area = centered_rect(45, 65, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Select type variant — Enter:Confirm  Esc:Cancel ")
+        .title(format!(" {} — j/k:Navigate  Enter:Confirm  Esc:Cancel ", title))
         .border_style(Style::default().fg(theme::BORDER_FOCUSED));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let items: Vec<ListItem> = TypeVariant::all()
+    let items: Vec<ListItem> = labels
         .iter()
-        .map(|v| ListItem::new(Span::raw(format!("  {}", v.label()))))
+        .map(|l| ListItem::new(Span::raw(format!("  {}", l))))
         .collect();
 
+    let clamped = cursor.min(labels.len().saturating_sub(1));
     let mut state = ratatui::widgets::ListState::default();
-    state.select(Some(selector_cursor));
+    state.select(Some(clamped));
 
     let list = List::new(items).highlight_style(theme::selected_focused());
     frame.render_stateful_widget(list, inner, &mut state);
+}
+
+fn render_type_variant_select(selector_cursor: usize, frame: &mut Frame) {
+    let labels: Vec<&str> = TypeVariant::all().iter().map(|v| v.label()).collect();
+    render_list_select("Select type variant", &labels, selector_cursor, frame);
 }
 
 fn render_picker_overlay(
@@ -479,6 +537,16 @@ fn render_help_overlay(frame: &mut Frame) {
         ("  Esc", "Close overlay"),
         ("", ""),
         ("  q / Ctrl+C", "Quit"),
+        ("", ""),
+        ("Type / field editing (tree focus)", ""),
+        ("  E", "Set encoding (Integer / Float types)"),
+        ("  S", "Toggle signed/unsigned (Integer type)"),
+        ("  b", "Set base type / container / MetaCommand"),
+        ("  t", "Change type reference (Parameter)"),
+        ("  B", "Toggle abstract flag"),
+        ("  D", "Cycle data source (Parameter)"),
+        ("  g", "Add argument to MetaCommand"),
+        ("  G", "Remove last MetaCommand argument"),
     ];
 
     let lines: Vec<Line<'static>> = bindings
