@@ -38,7 +38,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
             .areas(main_area);
 
-    render_title(frame, title_area);
+    render_title(app, frame, title_area);
     render_tree(app, frame, tree_area);
     render_detail(app, frame, detail_area);
     render_status(app, frame, status_area);
@@ -56,8 +56,13 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 // Main panel renderers
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn render_title(frame: &mut Frame, area: Rect) {
-    let title = Paragraph::new("XTCE Editor")
+fn render_title(app: &App, frame: &mut Frame, area: Rect) {
+    let label = if app.dirty {
+        format!("XTCE Editor  [{}*]", app.path.file_name().and_then(|n| n.to_str()).unwrap_or("?"))
+    } else {
+        format!("XTCE Editor  [{}]", app.path.file_name().and_then(|n| n.to_str()).unwrap_or("?"))
+    };
+    let title = Paragraph::new(label)
         .style(theme::title_bar())
         .alignment(Alignment::Center);
     frame.render_widget(title, area);
@@ -167,6 +172,9 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         spans.push(Span::styled(match_info, theme::dim()));
         spans.push(Span::styled("  Esc:Close  n:Next  N:Prev  ", theme::dim()));
     } else {
+        if let Some(err) = &app.save_error {
+            spans.push(Span::styled(format!(" Save failed: {}  ", err), theme::error()));
+        }
         let err_count = app.validation_errors.len();
         if err_count > 0 {
             spans.push(Span::styled(
@@ -183,7 +191,7 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         let hint = if app.show_errors || app.show_help {
             " Esc:Close  "
         } else {
-            " q:Quit  Tab:Focus  ←→/hl:Expand  ↑↓/jk:Navigate  r:Reload  /:Search  e:Errors  ?:Help "
+            " q:Quit  Tab:Focus  ←→/hl:Expand  ↑↓/jk:Navigate  r:Reload  s/^W:Save  /:Search  e:Errors  ?:Help "
         };
         spans.push(Span::styled(hint, theme::dim()));
     }
@@ -298,6 +306,7 @@ fn render_help_overlay(frame: &mut Frame) {
         ("", ""),
         ("File", ""),
         ("  r", "Reload from disk"),
+        ("  s / Ctrl+W", "Save to disk"),
         ("", ""),
         ("Search", ""),
         ("  /", "Open search prompt"),

@@ -50,6 +50,8 @@ pub enum Action {
     SearchPrev,
     /// Exit search mode (keeps matches highlighted for navigation).
     SearchExit,
+    /// Save the current SpaceSystem to disk.
+    Save,
 }
 
 /// Map a raw crossterm [`KeyEvent`] to an [`Action`] in normal mode.
@@ -79,6 +81,9 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Tab, _) => Some(Action::FocusNext),
         // File operations
         (KeyCode::Char('r'), _) => Some(Action::Reload),
+        (KeyCode::Char('s'), _) | (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+            Some(Action::Save)
+        }
         // Search
         (KeyCode::Char('/'), _) => Some(Action::SearchStart),
         (KeyCode::Char('n'), _) => Some(Action::SearchNext),

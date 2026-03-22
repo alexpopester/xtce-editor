@@ -61,6 +61,10 @@ pub struct App {
     pub search_matches: Vec<NodeId>,
     /// Which element of `search_matches` is the "active" (jump-to) match.
     pub search_match_cursor: usize,
+    /// True when the in-memory model differs from what is on disk.
+    pub dirty: bool,
+    /// Error message from the last failed save attempt, shown in the status bar.
+    pub save_error: Option<String>,
 }
 
 impl App {
@@ -91,6 +95,8 @@ impl App {
             search_query: String::new(),
             search_matches: Vec::new(),
             search_match_cursor: 0,
+            dirty: false,
+            save_error: None,
         }
     }
 
@@ -170,6 +176,7 @@ impl App {
                 self.search_mode = false;
                 // Matches stay active so n/N can still navigate them.
             }
+            Action::Save => self.save(),
         }
     }
 
@@ -300,11 +307,30 @@ impl App {
                 self.detail_scroll = 0;
                 self.search_mode = false;
                 self.search_query.clear();
+                self.dirty = false;
+                self.save_error = None;
                 self.validation_errors = xtce_core::validator::validate(&self.space_system);
                 self.rebuild_tree();
                 self.list_state.select(Some(0));
             }
             Err(_) => {} // keep current state on parse error
+        }
+    }
+
+    fn save(&mut self) {
+        match xtce_core::serializer::serialize(&self.space_system) {
+            Err(e) => {
+                self.save_error = Some(format!("Serialize error: {e}"));
+            }
+            Ok(bytes) => match std::fs::write(&self.path, &bytes) {
+                Ok(()) => {
+                    self.dirty = false;
+                    self.save_error = None;
+                }
+                Err(e) => {
+                    self.save_error = Some(format!("Write error: {e}"));
+                }
+            },
         }
     }
 }
