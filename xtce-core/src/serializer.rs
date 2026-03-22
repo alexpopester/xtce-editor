@@ -49,10 +49,7 @@ type W = Writer<Vec<u8>>;
 ///
 /// The returned bytes are a complete, well-formed XML document beginning with
 /// an `<?xml?>` declaration.  They can be written directly to a file or passed
-/// back to [`crate::parser::parse_bytes`] for round-trip verification.
-///
-/// Note: TelemetryMetaData and CommandMetaData serialization are added in T3–T6.
-/// Until then, only the SpaceSystem skeleton and Header are included.
+/// back to [`crate::parser::parse`] for round-trip verification.
 pub fn serialize(space_system: &SpaceSystem) -> Result<Vec<u8>, ParseError> {
     let mut w = Writer::new(Vec::new());
     w.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))?;
@@ -1036,8 +1033,9 @@ fn write_entry_location(w: &mut W, loc: &EntryLocation) -> Result<(), ParseError
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn write_command_meta_data(w: &mut W, cm: &CommandMetaData) -> Result<(), ParseError> {
-    let has_content =
-        !cm.argument_types.is_empty() || !cm.meta_commands.is_empty();
+    let has_content = !cm.argument_types.is_empty()
+        || !cm.meta_commands.is_empty()
+        || !cm.command_containers.is_empty();
     if !has_content {
         return Ok(());
     }
@@ -1047,6 +1045,13 @@ fn write_command_meta_data(w: &mut W, cm: &CommandMetaData) -> Result<(), ParseE
     }
     if !cm.meta_commands.is_empty() {
         write_meta_command_set(w, cm.meta_commands.values())?;
+    }
+    if !cm.command_containers.is_empty() {
+        w.write_event(Event::Start(BytesStart::new("CommandContainerSet")))?;
+        for c in cm.command_containers.values() {
+            write_sequence_container(w, c)?;
+        }
+        w.write_event(Event::End(BytesEnd::new("CommandContainerSet")))?;
     }
     w.write_event(Event::End(BytesEnd::new("CommandMetaData")))?;
     Ok(())
@@ -2032,5 +2037,62 @@ mod tests {
         let ParameterType::Array(t) = pt else { panic!() };
         assert_eq!(t.array_type_ref, "MyFloat");
         assert_eq!(t.number_of_dimensions, 2);
+    }
+
+    // ── File-based round-trip tests ───────────────────────────────────────────
+
+    /// Parse a real XTCE file, serialize it, re-parse, and assert the model is
+    /// semantically identical.  This catches any field omissions that the
+    /// per-element unit tests might miss, and verifies that the serializer
+    /// produces output the parser can consume (namespace-free tags vs. the
+    /// `xtce:`-prefixed input).
+    fn round_trip_file(path: &str) -> (crate::model::space_system::SpaceSystem, crate::model::space_system::SpaceSystem) {
+        let original = crate::parser::parse_file(std::path::Path::new(path))
+            .unwrap_or_else(|e| panic!("parse_file({path}) failed: {e}"));
+        let bytes = serialize(&original)
+            .unwrap_or_else(|e| panic!("serialize({path}) failed: {e}"));
+        let reparsed = crate::parser::parse(&bytes)
+            .unwrap_or_else(|e| panic!("re-parse({path}) failed: {e}"));
+        (original, reparsed)
+    }
+
+    #[test]
+    fn file_round_trip_simple_tlm() {
+        let (orig, rt) = round_trip_file("../test_data/simple_tlm.xtce");
+        assert_eq!(rt.name, orig.name);
+        let orig_tm = orig.telemetry.as_ref().unwrap();
+        let rt_tm = rt.telemetry.as_ref().unwrap();
+        assert_eq!(rt_tm.parameter_types.len(), orig_tm.parameter_types.len());
+        assert_eq!(rt_tm.parameters.len(), orig_tm.parameters.len());
+        assert_eq!(rt_tm.containers.len(), orig_tm.containers.len());
+    }
+
+    #[test]
+    fn file_round_trip_more_involved() {
+        let (orig, rt) = round_trip_file("../test_data/more_involved.xtce");
+        assert_eq!(rt.name, orig.name);
+        // Telemetry
+        let orig_tm = orig.telemetry.as_ref().unwrap();
+        let rt_tm = rt.telemetry.as_ref().unwrap();
+        assert_eq!(rt_tm.parameter_types.len(), orig_tm.parameter_types.len());
+        assert_eq!(rt_tm.parameters.len(), orig_tm.parameters.len());
+        assert_eq!(rt_tm.containers.len(), orig_tm.containers.len());
+        // Verify container inheritance survived
+        let rt_sys = rt_tm.containers.get("SystemStatusPacket").unwrap();
+        let orig_sys = orig_tm.containers.get("SystemStatusPacket").unwrap();
+        assert_eq!(
+            rt_sys.base_container.as_ref().map(|bc| bc.container_ref.as_str()),
+            orig_sys.base_container.as_ref().map(|bc| bc.container_ref.as_str()),
+        );
+        // Commands
+        let orig_cm = orig.command.as_ref().unwrap();
+        let rt_cm = rt.command.as_ref().unwrap();
+        assert_eq!(rt_cm.argument_types.len(), orig_cm.argument_types.len());
+        assert_eq!(rt_cm.meta_commands.len(), orig_cm.meta_commands.len());
+        // Verify argument list survived
+        let rt_mc = rt_cm.meta_commands.get("PowerCycleSubsystem").unwrap();
+        let orig_mc = orig_cm.meta_commands.get("PowerCycleSubsystem").unwrap();
+        assert_eq!(rt_mc.argument_list.len(), orig_mc.argument_list.len());
+        assert_eq!(rt_mc.argument_list[0].name, orig_mc.argument_list[0].name);
     }
 }
