@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn sequence_container_with_base() {
-        use crate::model::container::{ComparisonOperator, RestrictionCriteria, SequenceEntry};
+        use crate::model::container::{ComparisonOperator, RestrictionCriteria};
 
         let ss = parse_str(r#"
             <SpaceSystem name="Test">

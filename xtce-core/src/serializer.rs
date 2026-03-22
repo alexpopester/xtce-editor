@@ -1839,7 +1839,6 @@ mod tests {
             Argument, ArgumentRefEntry, ArgumentType, CommandContainer, CommandEntry,
             CommandMetaData, IntegerArgumentType, MetaCommand,
         };
-        use crate::model::types::IntegerEncoding;
         let mut ss = SpaceSystem::new("Test");
         let mut cm = CommandMetaData::default();
 
