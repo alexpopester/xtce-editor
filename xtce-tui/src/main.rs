@@ -57,6 +57,8 @@ fn run(app: &mut App, terminal: &mut tui::Ratatui) -> std::io::Result<()> {
                 event::create_key_to_action(key)
             } else if app.delete_confirm.is_some() {
                 event::delete_confirm_key_to_action(key)
+            } else if app.reload_confirm {
+                event::reload_confirm_key_to_action(key)
             } else if app.edit_state.is_some() {
                 event::edit_key_to_action(key)
             } else if app.search_mode {

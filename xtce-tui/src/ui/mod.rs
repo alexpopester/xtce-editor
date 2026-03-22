@@ -169,6 +169,13 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
 fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     let mut spans = Vec::new();
 
+    if app.reload_confirm {
+        spans.push(Span::styled(" Reload and discard unsaved changes?", theme::warn()));
+        spans.push(Span::styled("  y:Confirm  n/Esc:Cancel", theme::dim()));
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+
     if let Some(dc) = &app.delete_confirm {
         spans.push(Span::styled(" Delete '", theme::error()));
         spans.push(Span::styled(dc.name.clone(), theme::detail_value()));

@@ -71,6 +71,10 @@ pub enum Action {
     EditCommit,
     /// Discard the edit buffer and close the prompt.
     EditCancel,
+    /// Confirm reload despite unsaved changes.
+    ReloadConfirm,
+    /// Cancel a pending reload confirmation.
+    ReloadCancel,
     /// Begin the add-item flow for the selected node.
     CreateStart,
     /// Move the selector or picker cursor up.
@@ -185,6 +189,16 @@ pub fn delete_confirm_key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
         (KeyCode::Char('y'), _) => Some(Action::DeleteConfirm),
         (KeyCode::Char('n'), _) | (KeyCode::Esc, _) => Some(Action::DeleteCancel),
+        _ => None,
+    }
+}
+
+/// Map a raw crossterm [`KeyEvent`] to an [`Action`] while a reload confirmation is pending.
+pub fn reload_confirm_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Char('y'), _) => Some(Action::ReloadConfirm),
+        (KeyCode::Char('n'), _) | (KeyCode::Esc, _) => Some(Action::ReloadCancel),
         _ => None,
     }
 }

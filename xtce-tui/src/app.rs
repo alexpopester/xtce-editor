@@ -189,6 +189,8 @@ pub struct App {
     pub delete_confirm: Option<DeleteConfirmState>,
     /// Error message from a failed create attempt (e.g. duplicate name).
     pub create_error: Option<String>,
+    /// Whether a "discard changes and reload?" confirmation is pending.
+    pub reload_confirm: bool,
 }
 
 impl App {
@@ -225,6 +227,7 @@ impl App {
             create_state: None,
             delete_confirm: None,
             create_error: None,
+            reload_confirm: false,
         }
     }
 
@@ -252,6 +255,16 @@ impl App {
             match action {
                 Action::DeleteConfirm => self.commit_delete(),
                 Action::DeleteCancel  => { self.delete_confirm = None; }
+                _ => {}
+            }
+            return;
+        }
+
+        // Reload confirmation intercepts all input.
+        if self.reload_confirm {
+            match action {
+                Action::ReloadConfirm => { self.reload_confirm = false; self.reload(); }
+                Action::ReloadCancel  => { self.reload_confirm = false; }
                 _ => {}
             }
             return;
@@ -296,7 +309,13 @@ impl App {
             Action::Expand => self.expand_current(),
             Action::Collapse => self.collapse_current(),
             Action::FocusNext => self.cycle_focus(),
-            Action::Reload => self.reload(),
+            Action::Reload => {
+                if self.dirty {
+                    self.reload_confirm = true;
+                } else {
+                    self.reload();
+                }
+            }
             Action::ToggleErrors => self.show_errors = true,
             Action::ToggleHelp => self.show_help = true,
             Action::CloseOverlay => {}
@@ -352,6 +371,7 @@ impl App {
             Action::CreateMoveUp | Action::CreateMoveDown | Action::CreateConfirm
             | Action::CreateChar(_) | Action::CreateBackspace | Action::CreateCancel => {}
             Action::DeleteConfirm | Action::DeleteCancel => {}
+            Action::ReloadConfirm | Action::ReloadCancel => {}
         }
     }
 
