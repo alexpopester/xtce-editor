@@ -71,6 +71,26 @@ pub enum Action {
     EditCommit,
     /// Discard the edit buffer and close the prompt.
     EditCancel,
+    /// Begin the add-item flow for the selected node.
+    CreateStart,
+    /// Move the selector or picker cursor up.
+    CreateMoveUp,
+    /// Move the selector or picker cursor down.
+    CreateMoveDown,
+    /// Advance through create steps (TypeVariantSelect → NamePrompt → commit).
+    CreateConfirm,
+    /// Append a character in a create text field.
+    CreateChar(char),
+    /// Delete the last character in a create text field.
+    CreateBackspace,
+    /// Cancel and close the create flow.
+    CreateCancel,
+    /// Begin the delete-confirmation prompt for the selected node.
+    DeleteStart,
+    /// Confirm deletion.
+    DeleteConfirm,
+    /// Cancel deletion.
+    DeleteCancel,
 }
 
 /// Map a raw crossterm [`KeyEvent`] to an [`Action`] in normal mode.
@@ -110,6 +130,9 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('/'), _) => Some(Action::SearchStart),
         (KeyCode::Char('n'), _) => Some(Action::SearchNext),
         (KeyCode::Char('N'), _) => Some(Action::SearchPrev),
+        // Create / delete
+        (KeyCode::Char('a'), _) => Some(Action::CreateStart),
+        (KeyCode::Char('d'), _) => Some(Action::DeleteStart),
         // Overlays
         (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
@@ -130,6 +153,38 @@ pub fn edit_key_to_action(key: KeyEvent) -> Option<Action> {
         {
             Some(Action::EditChar(c))
         }
+        _ => None,
+    }
+}
+
+/// Map a raw crossterm [`KeyEvent`] to an [`Action`] while a create flow is active.
+///
+/// Arrow keys drive the selector/picker; printable characters feed the text
+/// buffer (in NamePrompt) or, for `j`/`k`, also navigate selectors/pickers
+/// (routing is resolved in [`crate::app::App::apply_action`]).
+pub fn create_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::CreateCancel),
+        (KeyCode::Enter, _) => Some(Action::CreateConfirm),
+        (KeyCode::Backspace, _) => Some(Action::CreateBackspace),
+        (KeyCode::Up, _) => Some(Action::CreateMoveUp),
+        (KeyCode::Down, _) => Some(Action::CreateMoveDown),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::CreateChar(c))
+        }
+        _ => None,
+    }
+}
+
+/// Map a raw crossterm [`KeyEvent`] to an [`Action`] while a delete confirmation is pending.
+pub fn delete_confirm_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Char('y'), _) => Some(Action::DeleteConfirm),
+        (KeyCode::Char('n'), _) | (KeyCode::Esc, _) => Some(Action::DeleteCancel),
         _ => None,
     }
 }

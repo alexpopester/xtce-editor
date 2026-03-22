@@ -19,7 +19,7 @@ use ratatui::{
 
 use xtce_core::ValidationError;
 
-use crate::app::{App, Focus};
+use crate::app::{App, CreateStep, Focus, TypeVariant};
 use crate::event::EditField;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -50,6 +50,17 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     }
     if app.show_help {
         render_help_overlay(frame);
+    }
+    if let Some(cs) = &app.create_state {
+        match &cs.step {
+            CreateStep::TypeVariantSelect { selector_cursor } => {
+                render_type_variant_select(*selector_cursor, frame);
+            }
+            CreateStep::PickerPrompt { filter, items, picker_cursor, .. } => {
+                render_picker_overlay("Pick type", filter, items, *picker_cursor, frame);
+            }
+            CreateStep::NamePrompt { .. } => {} // shown in status bar
+        }
     }
 }
 
@@ -158,6 +169,32 @@ fn render_detail(app: &App, frame: &mut Frame, area: Rect) {
 fn render_status(app: &App, frame: &mut Frame, area: Rect) {
     let mut spans = Vec::new();
 
+    if let Some(dc) = &app.delete_confirm {
+        spans.push(Span::styled(" Delete '", theme::error()));
+        spans.push(Span::styled(dc.name.clone(), theme::detail_value()));
+        spans.push(Span::styled("'?", theme::error()));
+        spans.push(Span::styled("  y:Confirm  n/Esc:Cancel", theme::dim()));
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+
+    if let Some(cs) = &app.create_state {
+        if let CreateStep::NamePrompt { buffer, variant } = &cs.step {
+            let kind_label = cs.kind.label();
+            let type_prefix = variant.map(|v| format!("{} ", v.label())).unwrap_or_default();
+            let prompt_label = format!(" New {}{} name: ", type_prefix, kind_label);
+            spans.push(Span::styled(prompt_label, theme::section_header()));
+            spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+            spans.push(Span::styled("_", theme::dim()));
+            if let Some(err) = &app.create_error {
+                spans.push(Span::styled(format!("  {}", err), theme::error()));
+            }
+            spans.push(Span::styled("  Enter:Confirm  Esc:Cancel", theme::dim()));
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            return;
+        }
+    }
+
     if let Some(edit) = &app.edit_state {
         let label = match edit.field {
             EditField::Name => "Rename",
@@ -205,7 +242,7 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         let hint = if app.show_errors || app.show_help {
             " Esc:Close  "
         } else {
-            " q:Quit  Tab:Focus  ←→/hl:Expand  ↑↓/jk:Navigate  r:Reload  s/^W:Save  /:Search  e:Errors  ?:Help "
+            " q:Quit  Tab:Focus  ←→/hl:Expand  ↑↓/jk:Navigate  r:Reload  s/^W:Save  /:Search  a:Add  d:Del  e:Errors  ?:Help "
         };
         spans.push(Span::styled(hint, theme::dim()));
     }
@@ -216,6 +253,90 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Overlay renderers
 // ─────────────────────────────────────────────────────────────────────────────
+
+fn render_type_variant_select(selector_cursor: usize, frame: &mut Frame) {
+    let area = centered_rect(40, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Select type variant — Enter:Confirm  Esc:Cancel ")
+        .border_style(Style::default().fg(theme::BORDER_FOCUSED));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let items: Vec<ListItem> = TypeVariant::all()
+        .iter()
+        .map(|v| ListItem::new(Span::raw(format!("  {}", v.label()))))
+        .collect();
+
+    let mut state = ratatui::widgets::ListState::default();
+    state.select(Some(selector_cursor));
+
+    let list = List::new(items).highlight_style(theme::selected_focused());
+    frame.render_stateful_widget(list, inner, &mut state);
+}
+
+fn render_picker_overlay(
+    title: &str,
+    filter: &str,
+    items: &[(String, String)],
+    picker_cursor: usize,
+    frame: &mut Frame,
+) {
+    let area = centered_rect(60, 75, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} — j/k:Navigate  Enter:Select  Esc:Cancel ", title))
+        .border_style(Style::default().fg(theme::BORDER_FOCUSED));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let [filter_area, list_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(inner);
+
+    // Filter line
+    let filter_line = Line::from(vec![
+        Span::styled(" Filter: ", theme::section_header()),
+        Span::styled(filter.to_string(), theme::detail_value()),
+        Span::styled("_", theme::dim()),
+    ]);
+    frame.render_widget(Paragraph::new(filter_line), filter_area);
+
+    // Filtered list
+    let q = filter.to_lowercase();
+    let filtered: Vec<&(String, String)> = items
+        .iter()
+        .filter(|(label, _)| q.is_empty() || label.to_lowercase().contains(&q))
+        .collect();
+
+    if filtered.is_empty() {
+        let msg = if items.is_empty() {
+            "  No items — create a type first"
+        } else {
+            "  No matches"
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(msg, theme::dim())),
+            list_area,
+        );
+        return;
+    }
+
+    let list_items: Vec<ListItem> = filtered
+        .iter()
+        .map(|(label, _)| ListItem::new(Span::raw(format!("  {}", label))))
+        .collect();
+
+    let mut state = ratatui::widgets::ListState::default();
+    let clamped = picker_cursor.min(filtered.len() - 1);
+    state.select(Some(clamped));
+
+    let list = List::new(list_items).highlight_style(theme::selected_focused());
+    frame.render_stateful_widget(list, list_area, &mut state);
+}
 
 fn render_errors_overlay(app: &App, frame: &mut Frame) {
     let area = centered_rect(75, 70, frame.area());
@@ -321,6 +442,10 @@ fn render_help_overlay(frame: &mut Frame) {
         ("Edit (tree focus)", ""),
         ("  i", "Rename selected item"),
         ("  C", "Edit description"),
+        ("", ""),
+        ("Create / Delete (tree focus)", ""),
+        ("  a", "Add item (sibling or child)"),
+        ("  d", "Delete selected item"),
         ("", ""),
         ("File", ""),
         ("  r", "Reload from disk"),

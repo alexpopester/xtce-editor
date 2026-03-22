@@ -53,7 +53,11 @@ fn run(app: &mut App, terminal: &mut tui::Ratatui) -> std::io::Result<()> {
             if key.kind != KeyEventKind::Press {
                 continue;
             }
-            let action = if app.edit_state.is_some() {
+            let action = if app.create_state.is_some() {
+                event::create_key_to_action(key)
+            } else if app.delete_confirm.is_some() {
+                event::delete_confirm_key_to_action(key)
+            } else if app.edit_state.is_some() {
                 event::edit_key_to_action(key)
             } else if app.search_mode {
                 event::search_key_to_action(key)
