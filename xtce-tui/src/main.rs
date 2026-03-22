@@ -55,6 +55,8 @@ fn run(app: &mut App, terminal: &mut tui::Ratatui) -> std::io::Result<()> {
             }
             let action = if app.create_state.is_some() {
                 event::create_key_to_action(key)
+            } else if app.entry_add_state.is_some() {
+                event::entry_add_key_to_action(key)
             } else if app.delete_confirm.is_some() {
                 event::delete_confirm_key_to_action(key)
             } else if app.reload_confirm {

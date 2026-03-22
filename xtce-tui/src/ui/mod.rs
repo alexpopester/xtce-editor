@@ -62,6 +62,14 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             CreateStep::NamePrompt { .. } => {} // shown in status bar
         }
     }
+    if let Some(ea) = &app.entry_add_state {
+        let title = match &ea.node_id {
+            tree::NodeId::TmContainer(_, _) => "Add ParameterRef entry",
+            tree::NodeId::CmdMetaCommand(_, _) => "Add ArgumentRef entry",
+            _ => "Add entry",
+        };
+        render_picker_overlay(title, &ea.filter, &ea.items, ea.cursor, frame);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -249,7 +257,7 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         let hint = if app.show_errors || app.show_help {
             " Esc:Close  "
         } else {
-            " q:Quit  Tab:Focus  ←→/hl:Expand  ↑↓/jk:Navigate  r:Reload  s/^W:Save  /:Search  a:Add  d:Del  e:Errors  ?:Help "
+            " q:Quit  Tab:Focus  ←→/hl:Expand  ↑↓/jk:Navigate  r:Reload  s/^W:Save  /:Search  a:Add  d:Del  A:AddEntry  x:RemLast  e:Errors  ?:Help "
         };
         spans.push(Span::styled(hint, theme::dim()));
     }
@@ -453,6 +461,8 @@ fn render_help_overlay(frame: &mut Frame) {
         ("Create / Delete (tree focus)", ""),
         ("  a", "Add item (sibling or child)"),
         ("  d", "Delete selected item"),
+        ("  A", "Add entry to container / MetaCommand"),
+        ("  x", "Remove last entry from container / MetaCommand"),
         ("", ""),
         ("File", ""),
         ("  r", "Reload from disk"),

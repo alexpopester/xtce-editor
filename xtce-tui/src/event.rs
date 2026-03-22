@@ -71,6 +71,22 @@ pub enum Action {
     EditCommit,
     /// Discard the edit buffer and close the prompt.
     EditCancel,
+    /// Open the entry-add picker for the selected container or MetaCommand.
+    EntryAddStart,
+    /// Move the entry-add picker cursor up.
+    EntryAddMoveUp,
+    /// Move the entry-add picker cursor down.
+    EntryAddMoveDown,
+    /// Confirm the selected entry-add picker item.
+    EntryAddConfirm,
+    /// Append a character to the entry-add filter.
+    EntryAddChar(char),
+    /// Delete the last character from the entry-add filter.
+    EntryAddBackspace,
+    /// Cancel and close the entry-add picker.
+    EntryAddCancel,
+    /// Remove the last entry from the selected container or MetaCommand.
+    EntryRemoveLast,
     /// Confirm reload despite unsaved changes.
     ReloadConfirm,
     /// Cancel a pending reload confirmation.
@@ -134,9 +150,11 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('/'), _) => Some(Action::SearchStart),
         (KeyCode::Char('n'), _) => Some(Action::SearchNext),
         (KeyCode::Char('N'), _) => Some(Action::SearchPrev),
-        // Create / delete
+        // Create / delete / entry editing
         (KeyCode::Char('a'), _) => Some(Action::CreateStart),
         (KeyCode::Char('d'), _) => Some(Action::DeleteStart),
+        (KeyCode::Char('A'), _) => Some(Action::EntryAddStart),
+        (KeyCode::Char('x'), _) => Some(Action::EntryRemoveLast),
         // Overlays
         (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
@@ -156,6 +174,24 @@ pub fn edit_key_to_action(key: KeyEvent) -> Option<Action> {
             if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
         {
             Some(Action::EditChar(c))
+        }
+        _ => None,
+    }
+}
+
+/// Map a raw crossterm [`KeyEvent`] to an [`Action`] while the entry-add picker is open.
+pub fn entry_add_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::EntryAddCancel),
+        (KeyCode::Enter, _) => Some(Action::EntryAddConfirm),
+        (KeyCode::Backspace, _) => Some(Action::EntryAddBackspace),
+        (KeyCode::Up, _) => Some(Action::EntryAddMoveUp),
+        (KeyCode::Down, _) => Some(Action::EntryAddMoveDown),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::EntryAddChar(c))
         }
         _ => None,
     }

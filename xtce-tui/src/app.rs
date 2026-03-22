@@ -114,6 +114,19 @@ pub enum CreateStep {
     },
 }
 
+/// State for the entry-add picker (adding a ParameterRef or ArgumentRef to an entry list).
+#[derive(Debug, Clone)]
+pub struct EntryAddState {
+    /// The container or MetaCommand being edited.
+    pub node_id: NodeId,
+    /// Current filter string typed by the user.
+    pub filter: String,
+    /// `(display_label, value_string)` — all candidate entries.
+    pub items: Vec<(String, String)>,
+    /// Currently highlighted row in the filtered list.
+    pub cursor: usize,
+}
+
 /// All state needed to drive the add-item wizard.
 #[derive(Debug, Clone)]
 pub struct CreateState {
@@ -191,6 +204,8 @@ pub struct App {
     pub create_error: Option<String>,
     /// Whether a "discard changes and reload?" confirmation is pending.
     pub reload_confirm: bool,
+    /// Active entry-add picker, or `None`.
+    pub entry_add_state: Option<EntryAddState>,
 }
 
 impl App {
@@ -228,6 +243,7 @@ impl App {
             delete_confirm: None,
             create_error: None,
             reload_confirm: false,
+            entry_add_state: None,
         }
     }
 
@@ -265,6 +281,20 @@ impl App {
             match action {
                 Action::ReloadConfirm => { self.reload_confirm = false; self.reload(); }
                 Action::ReloadCancel  => { self.reload_confirm = false; }
+                _ => {}
+            }
+            return;
+        }
+
+        // Entry-add picker intercepts all input.
+        if self.entry_add_state.is_some() {
+            match action {
+                Action::EntryAddCancel   => { self.entry_add_state = None; }
+                Action::EntryAddConfirm  => self.commit_entry_add(),
+                Action::EntryAddMoveUp   => self.entry_add_move(-1),
+                Action::EntryAddMoveDown => self.entry_add_move(1),
+                Action::EntryAddChar(c)  => self.entry_add_push_char(c),
+                Action::EntryAddBackspace => self.entry_add_pop_char(),
                 _ => {}
             }
             return;
@@ -364,14 +394,18 @@ impl App {
             }
             Action::Save => self.save(),
             Action::EditStart(field) => self.start_edit(field),
-            Action::CreateStart => self.start_create(),
-            Action::DeleteStart => self.start_delete(),
+            Action::CreateStart  => self.start_create(),
+            Action::DeleteStart  => self.start_delete(),
+            Action::EntryAddStart   => self.start_entry_add(),
+            Action::EntryRemoveLast => self.remove_last_entry(),
             // These are only dispatched in their respective modes; ignore otherwise.
             Action::EditChar(_) | Action::EditBackspace | Action::EditCommit | Action::EditCancel => {}
             Action::CreateMoveUp | Action::CreateMoveDown | Action::CreateConfirm
             | Action::CreateChar(_) | Action::CreateBackspace | Action::CreateCancel => {}
             Action::DeleteConfirm | Action::DeleteCancel => {}
             Action::ReloadConfirm | Action::ReloadCancel => {}
+            Action::EntryAddMoveUp | Action::EntryAddMoveDown | Action::EntryAddConfirm
+            | Action::EntryAddChar(_) | Action::EntryAddBackspace | Action::EntryAddCancel => {}
         }
     }
 
@@ -1127,6 +1161,173 @@ impl App {
         self.dirty = true;
         self.validation_errors = xtce_core::validator::validate(&self.space_system);
         self.rebuild_tree();
+    }
+
+    // ── Entry list editing ────────────────────────────────────────────────────
+
+    fn start_entry_add(&mut self) {
+        if self.focus != Focus::Tree {
+            return;
+        }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let node_id = node.node_id.clone();
+
+        let items = match &node_id {
+            NodeId::TmContainer(path, _) => {
+                // Picker shows all Parameters in the same SpaceSystem.
+                let mut out = Vec::new();
+                if let Some(ss) = get_ss(&self.space_system, path) {
+                    if let Some(tm) = &ss.telemetry {
+                        for name in tm.parameters.keys() {
+                            out.push((name.clone(), name.clone()));
+                        }
+                    }
+                }
+                out
+            }
+            NodeId::CmdMetaCommand(path, mc_name) => {
+                // Picker shows the MetaCommand's own argument_list.
+                let mut out = Vec::new();
+                if let Some(mc) = get_ss(&self.space_system, path)
+                    .and_then(|ss| ss.command.as_ref())
+                    .and_then(|cmd| cmd.meta_commands.get(mc_name.as_str()))
+                {
+                    for arg in &mc.argument_list {
+                        let label = if let Some(d) = &arg.short_description {
+                            format!("{} — {}", arg.name, d)
+                        } else {
+                            format!("{} ({})", arg.name, arg.argument_type_ref)
+                        };
+                        out.push((label, arg.name.clone()));
+                    }
+                }
+                out
+            }
+            _ => return, // not an editable entry-list node
+        };
+
+        self.entry_add_state = Some(EntryAddState {
+            node_id,
+            filter: String::new(),
+            items,
+            cursor: 0,
+        });
+    }
+
+    fn entry_add_move(&mut self, delta: i64) {
+        let Some(ea) = self.entry_add_state.as_mut() else { return };
+        let count = filtered_count(&ea.items, &ea.filter);
+        if count > 0 {
+            let new = (ea.cursor as i64 + delta).clamp(0, count as i64 - 1) as usize;
+            ea.cursor = new;
+        }
+    }
+
+    fn entry_add_push_char(&mut self, c: char) {
+        let Some(ea) = self.entry_add_state.as_mut() else { return };
+        if c == 'j' {
+            let count = filtered_count(&ea.items, &ea.filter);
+            if count > 0 {
+                ea.cursor = (ea.cursor + 1).min(count - 1);
+            }
+        } else if c == 'k' {
+            ea.cursor = ea.cursor.saturating_sub(1);
+        } else {
+            ea.filter.push(c);
+            ea.cursor = 0;
+        }
+    }
+
+    fn entry_add_pop_char(&mut self) {
+        let Some(ea) = self.entry_add_state.as_mut() else { return };
+        ea.filter.pop();
+        ea.cursor = 0;
+    }
+
+    fn commit_entry_add(&mut self) {
+        let Some(ea) = self.entry_add_state.take() else { return };
+        let q = ea.filter.to_lowercase();
+        let filtered: Vec<_> = ea
+            .items
+            .iter()
+            .filter(|(label, _)| q.is_empty() || label.to_lowercase().contains(&q))
+            .collect();
+        if filtered.is_empty() {
+            return;
+        }
+        let idx = ea.cursor.min(filtered.len() - 1);
+        let value = filtered[idx].1.clone();
+
+        match &ea.node_id {
+            NodeId::TmContainer(path, name) => {
+                use xtce_core::model::container::{ParameterRefEntry, SequenceEntry};
+                if let Some(c) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.containers.get_mut(name.as_str()))
+                {
+                    c.entry_list.push(SequenceEntry::ParameterRef(ParameterRefEntry {
+                        parameter_ref: value,
+                        location: None,
+                        include_condition: None,
+                    }));
+                }
+            }
+            NodeId::CmdMetaCommand(path, mc_name) => {
+                use xtce_core::model::command::{ArgumentRefEntry, CommandContainer, CommandEntry};
+                if let Some(mc) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.meta_commands.get_mut(mc_name.as_str()))
+                {
+                    let cc = mc.command_container.get_or_insert_with(|| CommandContainer {
+                        name: format!("{}Container", mc_name),
+                        base_container: None,
+                        entry_list: Vec::new(),
+                    });
+                    cc.entry_list.push(CommandEntry::ArgumentRef(ArgumentRefEntry {
+                        argument_ref: value,
+                        location: None,
+                    }));
+                }
+            }
+            _ => return,
+        }
+
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        self.rebuild_tree();
+    }
+
+    fn remove_last_entry(&mut self) {
+        if self.focus != Focus::Tree {
+            return;
+        }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let node_id = node.node_id.clone();
+
+        let removed = match &node_id {
+            NodeId::TmContainer(path, name) => {
+                get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.containers.get_mut(name.as_str()))
+                    .and_then(|c| c.entry_list.pop())
+                    .is_some()
+            }
+            NodeId::CmdMetaCommand(path, mc_name) => {
+                get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.meta_commands.get_mut(mc_name.as_str()))
+                    .and_then(|mc| mc.command_container.as_mut())
+                    .and_then(|cc| cc.entry_list.pop())
+                    .is_some()
+            }
+            _ => false,
+        };
+
+        if removed {
+            self.dirty = true;
+            self.validation_errors = xtce_core::validator::validate(&self.space_system);
+            self.rebuild_tree();
+        }
     }
 }
 
