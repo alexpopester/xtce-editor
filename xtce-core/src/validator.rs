@@ -107,6 +107,7 @@ fn validate_space_system(
     }
 
     check_duplicate_sub_system_names(ss, errors);
+    check_duplicate_names(ss, parent_scope, errors);
 
     for child in &ss.sub_systems {
         validate_space_system(child, &scope, errors);
@@ -127,6 +128,94 @@ fn check_duplicate_sub_system_names(ss: &SpaceSystem, errors: &mut Vec<Validatio
                 name: child.name.clone(),
                 space_system: ss.name.clone(),
             });
+        }
+    }
+}
+
+/// Flag names in `ss` that collide with names already present in an ancestor
+/// scope, and flag any within-SpaceSystem container namespace collision.
+///
+/// # Two cases detected
+///
+/// 1. **Shadowing** — a SpaceSystem defines a name (ParameterType, Parameter,
+///    SequenceContainer, ArgumentType, or MetaCommand) that already exists in a
+///    parent or grandparent SpaceSystem's scope.  XTCE scoping allows this, but
+///    it is almost always unintentional and can cause confusing reference
+///    resolution.
+///
+/// 2. **Container namespace collision** — telemetry `SequenceContainer`s and
+///    command `CommandContainer`s share a single "containers" namespace within a
+///    SpaceSystem.  A name present in both `TelemetryMetaData.containers` and
+///    `CommandMetaData.command_containers` of the *same* SpaceSystem is
+///    ambiguous (this state can arise via the TUI editor).
+fn check_duplicate_names(
+    ss: &SpaceSystem,
+    parent_scope: &Scope<'_>,
+    errors: &mut Vec<ValidationError>,
+) {
+    // ── Container namespace collision within the same SpaceSystem ─────────────
+    if let (Some(tm), Some(cmd)) = (&ss.telemetry, &ss.command) {
+        for name in tm.containers.keys() {
+            if cmd.command_containers.contains_key(name.as_str()) {
+                errors.push(ValidationError::DuplicateName {
+                    name: name.clone(),
+                    space_system: ss.name.clone(),
+                });
+            }
+        }
+    }
+
+    // ── Shadowing: names that already appear in an ancestor scope ─────────────
+    if let Some(tm) = &ss.telemetry {
+        for name in tm.parameter_types.keys() {
+            if parent_scope.parameter_types.contains(name.as_str()) {
+                errors.push(ValidationError::DuplicateName {
+                    name: name.clone(),
+                    space_system: ss.name.clone(),
+                });
+            }
+        }
+        for name in tm.parameters.keys() {
+            if parent_scope.parameters.contains(name.as_str()) {
+                errors.push(ValidationError::DuplicateName {
+                    name: name.clone(),
+                    space_system: ss.name.clone(),
+                });
+            }
+        }
+        for name in tm.containers.keys() {
+            if parent_scope.containers.contains(name.as_str()) {
+                errors.push(ValidationError::DuplicateName {
+                    name: name.clone(),
+                    space_system: ss.name.clone(),
+                });
+            }
+        }
+    }
+    if let Some(cmd) = &ss.command {
+        for name in cmd.argument_types.keys() {
+            if parent_scope.argument_types.contains(name.as_str()) {
+                errors.push(ValidationError::DuplicateName {
+                    name: name.clone(),
+                    space_system: ss.name.clone(),
+                });
+            }
+        }
+        for name in cmd.meta_commands.keys() {
+            if parent_scope.meta_commands.contains(name.as_str()) {
+                errors.push(ValidationError::DuplicateName {
+                    name: name.clone(),
+                    space_system: ss.name.clone(),
+                });
+            }
+        }
+        for name in cmd.command_containers.keys() {
+            if parent_scope.containers.contains(name.as_str()) {
+                errors.push(ValidationError::DuplicateName {
+                    name: name.clone(),
+                    space_system: ss.name.clone(),
+                });
+            }
         }
     }
 }
@@ -1011,6 +1100,227 @@ mod tests {
         assert_eq!(errors.len(), 1, "expected one error, got {:?}", errors);
         assert!(
             matches!(&errors[0], ValidationError::DuplicateName { name, .. } if name == "Sub"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    // ── Shadowing: child redefines a name from an ancestor ────────────────────
+
+    #[test]
+    fn shadowed_parameter_type_flagged() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Root">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <IntegerParameterType name="uint8">
+                    <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+                  </IntegerParameterType>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+              <SpaceSystem name="Child">
+                <TelemetryMetaData>
+                  <ParameterTypeSet>
+                    <IntegerParameterType name="uint8">
+                      <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+                    </IntegerParameterType>
+                  </ParameterTypeSet>
+                </TelemetryMetaData>
+              </SpaceSystem>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "expected one DuplicateName error, got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::DuplicateName { name, space_system }
+                if name == "uint8" && space_system == "Child"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn shadowed_parameter_flagged() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Root">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <IntegerParameterType name="T">
+                    <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+                  </IntegerParameterType>
+                </ParameterTypeSet>
+                <ParameterSet>
+                  <Parameter name="SensorVal" parameterTypeRef="T"/>
+                </ParameterSet>
+              </TelemetryMetaData>
+              <SpaceSystem name="Child">
+                <TelemetryMetaData>
+                  <ParameterTypeSet>
+                    <IntegerParameterType name="ChildT">
+                      <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+                    </IntegerParameterType>
+                  </ParameterTypeSet>
+                  <ParameterSet>
+                    <Parameter name="SensorVal" parameterTypeRef="ChildT"/>
+                  </ParameterSet>
+                </TelemetryMetaData>
+              </SpaceSystem>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "expected one DuplicateName error, got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::DuplicateName { name, space_system }
+                if name == "SensorVal" && space_system == "Child"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn shadowed_container_flagged() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Root">
+              <TelemetryMetaData>
+                <ContainerSet>
+                  <SequenceContainer name="PrimaryPkt">
+                    <EntryList/>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+              <SpaceSystem name="Child">
+                <TelemetryMetaData>
+                  <ContainerSet>
+                    <SequenceContainer name="PrimaryPkt">
+                      <EntryList/>
+                    </SequenceContainer>
+                  </ContainerSet>
+                </TelemetryMetaData>
+              </SpaceSystem>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "expected one DuplicateName error, got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::DuplicateName { name, space_system }
+                if name == "PrimaryPkt" && space_system == "Child"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn shadowed_argument_type_flagged() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Root">
+              <CommandMetaData>
+                <ArgumentTypeSet>
+                  <IntegerArgumentType name="uint16">
+                    <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+                  </IntegerArgumentType>
+                </ArgumentTypeSet>
+              </CommandMetaData>
+              <SpaceSystem name="Child">
+                <CommandMetaData>
+                  <ArgumentTypeSet>
+                    <IntegerArgumentType name="uint16">
+                      <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+                    </IntegerArgumentType>
+                  </ArgumentTypeSet>
+                </CommandMetaData>
+              </SpaceSystem>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "expected one DuplicateName error, got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::DuplicateName { name, space_system }
+                if name == "uint16" && space_system == "Child"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn shadowed_meta_command_flagged() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Root">
+              <CommandMetaData>
+                <MetaCommandSet>
+                  <MetaCommand name="Noop">
+                    <CommandContainer name="NoopContainer">
+                      <EntryList/>
+                    </CommandContainer>
+                  </MetaCommand>
+                </MetaCommandSet>
+              </CommandMetaData>
+              <SpaceSystem name="Child">
+                <CommandMetaData>
+                  <MetaCommandSet>
+                    <MetaCommand name="Noop">
+                      <CommandContainer name="ChildNoopContainer">
+                        <EntryList/>
+                      </CommandContainer>
+                    </MetaCommand>
+                  </MetaCommandSet>
+                </CommandMetaData>
+              </SpaceSystem>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "expected one DuplicateName error, got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::DuplicateName { name, space_system }
+                if name == "Noop" && space_system == "Child"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn unique_names_in_child_no_error() {
+        // Child defines names that don't overlap with parent — no duplicate errors.
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Root">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <IntegerParameterType name="RootT">
+                    <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+                  </IntegerParameterType>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+              <SpaceSystem name="Child">
+                <TelemetryMetaData>
+                  <ParameterTypeSet>
+                    <IntegerParameterType name="ChildT">
+                      <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+                    </IntegerParameterType>
+                  </ParameterTypeSet>
+                </TelemetryMetaData>
+              </SpaceSystem>
+            </SpaceSystem>
+        "#);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    // ── Container namespace collision within same SpaceSystem ─────────────────
+
+    #[test]
+    fn container_namespace_collision_flagged() {
+        use crate::model::command::CommandMetaData;
+        use crate::model::container::SequenceContainer;
+        use crate::model::telemetry::TelemetryMetaData;
+
+        let mut ss = crate::SpaceSystem::new("Root");
+        let mut tm = TelemetryMetaData::default();
+        tm.containers.insert("Pkt".into(), SequenceContainer::new("Pkt"));
+        ss.telemetry = Some(tm);
+
+        let mut cmd = CommandMetaData::default();
+        cmd.command_containers
+            .insert("Pkt".into(), SequenceContainer::new("Pkt"));
+        ss.command = Some(cmd);
+
+        let errors = validate(&ss);
+        assert_eq!(errors.len(), 1, "expected one DuplicateName error, got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::DuplicateName { name, space_system }
+                if name == "Pkt" && space_system == "Root"),
             "got {:?}",
             errors
         );
