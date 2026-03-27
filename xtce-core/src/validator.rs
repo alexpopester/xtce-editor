@@ -106,8 +106,28 @@ fn validate_space_system(
         detect_meta_command_cycles(&ss.name, &cmd.meta_commands, errors);
     }
 
+    check_duplicate_sub_system_names(ss, errors);
+
     for child in &ss.sub_systems {
         validate_space_system(child, &scope, errors);
+    }
+}
+
+/// Flag any two sibling SpaceSystems that share the same name.
+///
+/// Sub-systems are stored in a `Vec`, so the parser (and programmatic
+/// construction) can produce duplicates that IndexMap-backed collections
+/// cannot.  Each duplicated name is reported once.
+fn check_duplicate_sub_system_names(ss: &SpaceSystem, errors: &mut Vec<ValidationError>) {
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut reported: HashSet<&str> = HashSet::new();
+    for child in &ss.sub_systems {
+        if !seen.insert(child.name.as_str()) && reported.insert(child.name.as_str()) {
+            errors.push(ValidationError::DuplicateName {
+                name: child.name.clone(),
+                space_system: ss.name.clone(),
+            });
+        }
     }
 }
 
@@ -943,6 +963,54 @@ mod tests {
         assert!(
             matches!(&errors[0], ValidationError::UnresolvedReference { name, .. }
                 if name == "NoSuchElementType"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    // ── Duplicate sub-system names ────────────────────────────────────────────
+
+    #[test]
+    fn duplicate_sub_system_names_flagged() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Root">
+              <SpaceSystem name="Sub"/>
+              <SpaceSystem name="Sub"/>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "expected exactly one DuplicateName error, got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::DuplicateName { name, space_system }
+                if name == "Sub" && space_system == "Root"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn unique_sub_system_names_no_error() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Root">
+              <SpaceSystem name="Alpha"/>
+              <SpaceSystem name="Beta"/>
+            </SpaceSystem>
+        "#);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+    }
+
+    #[test]
+    fn duplicate_sub_system_name_reported_once_for_three_copies() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Root">
+              <SpaceSystem name="Sub"/>
+              <SpaceSystem name="Sub"/>
+              <SpaceSystem name="Sub"/>
+            </SpaceSystem>
+        "#);
+        // Three siblings with the same name → exactly one DuplicateName error.
+        assert_eq!(errors.len(), 1, "expected one error, got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::DuplicateName { name, .. } if name == "Sub"),
             "got {:?}",
             errors
         );
