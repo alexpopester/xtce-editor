@@ -162,6 +162,12 @@ pub enum Action {
     RestrictionEditChar(char),
     RestrictionEditBackspace,
     RestrictionEditCancel,
+    // Unit editor (ParameterType / ArgumentType)
+    UnitEditStart,
+    UnitEditConfirm,
+    UnitEditChar(char),
+    UnitEditBackspace,
+    UnitEditCancel,
     // Calibrator editor (Integer / Float types)
     CalibratorStart,
     CalibratorConfirm,
@@ -228,6 +234,7 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('R'), _) => Some(Action::RestrictionEditStart),
         (KeyCode::Char('L'), _) => Some(Action::EntryLocationStart),
         (KeyCode::Char('K'), _) => Some(Action::CalibratorStart),
+        (KeyCode::Char('U'), _) => Some(Action::UnitEditStart),
         // Overlays
         (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
@@ -375,6 +382,21 @@ pub fn restriction_edit_key_to_action(key: KeyEvent) -> Option<Action> {
             if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
         {
             Some(Action::RestrictionEditChar(c))
+        }
+        _ => None,
+    }
+}
+
+pub fn unit_edit_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::UnitEditCancel),
+        (KeyCode::Enter, _) => Some(Action::UnitEditConfirm),
+        (KeyCode::Backspace, _) => Some(Action::UnitEditBackspace),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::UnitEditChar(c))
         }
         _ => None,
     }

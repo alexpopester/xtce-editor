@@ -65,6 +65,8 @@ fn run(app: &mut App, terminal: &mut tui::Ratatui) -> std::io::Result<()> {
                 event::restriction_edit_key_to_action(key)
             } else if app.calibrator_state.is_some() {
                 event::calibrator_key_to_action(key)
+            } else if app.unit_edit_state.is_some() {
+                event::unit_edit_key_to_action(key)
             } else if app.create_state.is_some() {
                 event::create_key_to_action(key)
             } else if app.entry_add_state.is_some() {

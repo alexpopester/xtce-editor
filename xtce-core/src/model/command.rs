@@ -193,6 +193,19 @@ impl ArgumentType {
             ArgumentType::Array(t) => t.base_type = base,
         }
     }
+
+    pub fn unit_set_mut(&mut self) -> &mut Vec<crate::model::types::Unit> {
+        match self {
+            ArgumentType::Integer(t)    => &mut t.unit_set,
+            ArgumentType::Float(t)      => &mut t.unit_set,
+            ArgumentType::Enumerated(t) => &mut t.unit_set,
+            ArgumentType::Boolean(t)    => &mut t.unit_set,
+            ArgumentType::String(t)     => &mut t.unit_set,
+            ArgumentType::Binary(t)     => &mut t.unit_set,
+            ArgumentType::Aggregate(t)  => &mut t.unit_set,
+            ArgumentType::Array(t)      => &mut t.unit_set,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

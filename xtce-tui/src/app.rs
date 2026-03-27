@@ -247,6 +247,24 @@ pub struct RestrictionEditState {
     pub step: RestrictionEditStep,
 }
 
+// ── Unit editor state ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum UnitEditStep {
+    /// Show current units; `a` to add, `d` to remove last, Enter/Esc to close.
+    Review,
+    /// Buffer for the new unit value string.
+    AddUnit { buffer: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct UnitEditState {
+    pub node_id: NodeId,
+    /// Working copy of the units being edited.  Applied to the model on `Confirm`.
+    pub units: Vec<xtce_core::model::types::Unit>,
+    pub step: UnitEditStep,
+}
+
 // ── Calibrator editor state ──────────────────────────────────────────────────
 
 pub const CALIBRATOR_KIND_LABELS: &[&str] = &["None", "Polynomial", "Spline"];
@@ -349,6 +367,8 @@ pub struct App {
     pub entry_location_state: Option<EntryLocationState>,
     /// Active calibrator editor, or `None`.
     pub calibrator_state: Option<CalibratorState>,
+    /// Active unit editor, or `None`.
+    pub unit_edit_state: Option<UnitEditState>,
     /// Undo history: snapshots of `space_system` taken before each mutation.
     /// Most recent snapshot is at the back. Capped at 50 entries.
     pub undo_stack: VecDeque<SpaceSystem>,
@@ -398,6 +418,7 @@ impl App {
             restriction_edit_state: None,
             entry_location_state: None,
             calibrator_state: None,
+            unit_edit_state: None,
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
         }
@@ -482,6 +503,18 @@ impl App {
                 Action::CalibratorMoveDown  => self.calibrator_move(1),
                 Action::CalibratorChar(c)   => self.calibrator_push_char(c),
                 Action::CalibratorBackspace => self.calibrator_pop_char(),
+                _ => {}
+            }
+            return;
+        }
+
+        // Unit editor intercepts all input.
+        if self.unit_edit_state.is_some() {
+            match action {
+                Action::UnitEditCancel  => self.unit_edit_cancel(),
+                Action::UnitEditConfirm => self.unit_edit_confirm(),
+                Action::UnitEditChar(c) => self.unit_edit_push_char(c),
+                Action::UnitEditBackspace => self.unit_edit_pop_char(),
                 _ => {}
             }
             return;
@@ -646,6 +679,7 @@ impl App {
             Action::RestrictionEditStart  => self.start_restriction_edit(),
             Action::EntryLocationStart    => self.start_entry_location(),
             Action::CalibratorStart       => self.start_calibrator_edit(),
+            Action::UnitEditStart         => self.start_unit_edit(),
             Action::CreateStart  => self.start_create(),
             Action::DeleteStart  => self.start_delete(),
             Action::EntryAddStart   => self.start_entry_add(),
@@ -672,6 +706,8 @@ impl App {
             | Action::EntryLocationBackspace | Action::EntryLocationCancel => {}
             Action::CalibratorConfirm | Action::CalibratorMoveUp | Action::CalibratorMoveDown
             | Action::CalibratorChar(_) | Action::CalibratorBackspace | Action::CalibratorCancel => {}
+            Action::UnitEditConfirm | Action::UnitEditChar(_)
+            | Action::UnitEditBackspace | Action::UnitEditCancel => {}
         }
     }
 
@@ -2837,6 +2873,145 @@ impl App {
         }
         self.dirty = true;
         self.validation_errors = xtce_core::validator::validate(&self.space_system);
+    }
+
+    // ── Unit editor ──────────────────────────────────────────────────────────
+
+    fn start_unit_edit(&mut self) {
+        use xtce_core::model::telemetry::ParameterType;
+        use xtce_core::model::command::ArgumentType;
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let node_id = node.node_id.clone();
+
+        let units = match &node_id {
+            NodeId::TmParameterType(path, name) => {
+                get_ss(&self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_ref())
+                    .and_then(|tm| tm.parameter_types.get(name.as_str()))
+                    .map(|pt| match pt {
+                        ParameterType::Integer(t) => t.unit_set.clone(),
+                        ParameterType::Float(t) => t.unit_set.clone(),
+                        ParameterType::Enumerated(t) => t.unit_set.clone(),
+                        ParameterType::Boolean(t) => t.unit_set.clone(),
+                        ParameterType::String(t) => t.unit_set.clone(),
+                        ParameterType::Binary(t) => t.unit_set.clone(),
+                        ParameterType::Aggregate(t) => t.unit_set.clone(),
+                        ParameterType::Array(t) => t.unit_set.clone(),
+                    })
+            }
+            NodeId::CmdArgumentType(path, name) => {
+                get_ss(&self.space_system, path)
+                    .and_then(|ss| ss.command.as_ref())
+                    .and_then(|cmd| cmd.argument_types.get(name.as_str()))
+                    .map(|at| match at {
+                        ArgumentType::Integer(t) => t.unit_set.clone(),
+                        ArgumentType::Float(t) => t.unit_set.clone(),
+                        ArgumentType::Enumerated(t) => t.unit_set.clone(),
+                        ArgumentType::Boolean(t) => t.unit_set.clone(),
+                        ArgumentType::String(t) => t.unit_set.clone(),
+                        ArgumentType::Binary(t) => t.unit_set.clone(),
+                        ArgumentType::Aggregate(t) => t.unit_set.clone(),
+                        ArgumentType::Array(t) => t.unit_set.clone(),
+                    })
+            }
+            _ => return,
+        };
+
+        let Some(units) = units else { return };
+        self.unit_edit_state = Some(UnitEditState { node_id, units, step: UnitEditStep::Review });
+    }
+
+    fn unit_edit_cancel(&mut self) {
+        let Some(us) = self.unit_edit_state.take() else { return };
+        match us.step {
+            UnitEditStep::Review => {
+                // Discard working copy — no changes applied.
+            }
+            UnitEditStep::AddUnit { .. } => {
+                // Go back to review without adding.
+                self.unit_edit_state = Some(UnitEditState {
+                    node_id: us.node_id,
+                    units: us.units,
+                    step: UnitEditStep::Review,
+                });
+            }
+        }
+    }
+
+    fn unit_edit_confirm(&mut self) {
+        use xtce_core::model::types::Unit;
+        let Some(us) = self.unit_edit_state.take() else { return };
+        match us.step {
+            UnitEditStep::Review => {
+                // Commit working copy to model.
+                self.commit_unit_set(&us.node_id, us.units);
+            }
+            UnitEditStep::AddUnit { buffer } => {
+                let value = buffer.trim().to_string();
+                let mut units = us.units;
+                if !value.is_empty() {
+                    units.push(Unit { value, power: None, factor: None, description: None });
+                }
+                self.unit_edit_state = Some(UnitEditState {
+                    node_id: us.node_id,
+                    units,
+                    step: UnitEditStep::Review,
+                });
+            }
+        }
+    }
+
+    fn unit_edit_push_char(&mut self, c: char) {
+        let Some(us) = self.unit_edit_state.as_mut() else { return };
+        match &mut us.step {
+            UnitEditStep::Review => {
+                if c == 'a' {
+                    us.step = UnitEditStep::AddUnit { buffer: String::new() };
+                } else if c == 'd' {
+                    us.units.pop();
+                }
+            }
+            UnitEditStep::AddUnit { buffer } => {
+                buffer.push(c);
+            }
+        }
+    }
+
+    fn unit_edit_pop_char(&mut self) {
+        let Some(us) = self.unit_edit_state.as_mut() else { return };
+        if let UnitEditStep::AddUnit { buffer } = &mut us.step {
+            buffer.pop();
+        }
+    }
+
+    fn commit_unit_set(&mut self, node_id: &NodeId, units: Vec<xtce_core::model::types::Unit>) {
+        self.push_undo_snapshot();
+        let changed = match node_id {
+            NodeId::TmParameterType(path, name) => {
+                if let Some(pt) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.parameter_types.get_mut(name.as_str()))
+                {
+                    *pt.unit_set_mut() = units;
+                    true
+                } else { false }
+            }
+            NodeId::CmdArgumentType(path, name) => {
+                if let Some(at) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.argument_types.get_mut(name.as_str()))
+                {
+                    *at.unit_set_mut() = units;
+                    true
+                } else { false }
+            }
+            _ => false,
+        };
+        if changed {
+            self.dirty = true;
+            self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        }
     }
 
     // ── Calibrator editor ─────────────────────────────────────────────────────

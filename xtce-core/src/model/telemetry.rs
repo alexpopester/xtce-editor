@@ -142,6 +142,19 @@ impl ParameterType {
             ParameterType::Array(t) => t.base_type = base,
         }
     }
+
+    pub fn unit_set_mut(&mut self) -> &mut Vec<crate::model::types::Unit> {
+        match self {
+            ParameterType::Integer(t)    => &mut t.unit_set,
+            ParameterType::Float(t)      => &mut t.unit_set,
+            ParameterType::Enumerated(t) => &mut t.unit_set,
+            ParameterType::Boolean(t)    => &mut t.unit_set,
+            ParameterType::String(t)     => &mut t.unit_set,
+            ParameterType::Binary(t)     => &mut t.unit_set,
+            ParameterType::Aggregate(t)  => &mut t.unit_set,
+            ParameterType::Array(t)      => &mut t.unit_set,
+        }
+    }
 }
 
 // ── Common fields shared by all parameter types ─────────────────────────────

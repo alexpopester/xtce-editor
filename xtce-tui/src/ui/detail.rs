@@ -1200,4 +1200,5 @@ fn push_units(lines: &mut Vec<Line<'static>>, units: &[Unit]) {
         let s = units.iter().map(|u| u.value.as_str()).collect::<Vec<_>>().join(", ");
         lines.push(field("Units:", s));
     }
+    lines.push(note("U: edit units"));
 }

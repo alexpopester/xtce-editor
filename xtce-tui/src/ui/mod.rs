@@ -21,8 +21,8 @@ use xtce_core::ValidationError;
 
 use crate::app::{
     App, CalibratorStep, CreateStep, EntryAddStep, EntryLocationStep, Focus, RestrictionEditStep,
-    TypeVariant, CALIBRATOR_KIND_LABELS, RESTRICTION_OPERATOR_LABELS, integer_encoding_labels,
-    float_size_labels,
+    TypeVariant, UnitEditStep, CALIBRATOR_KIND_LABELS, RESTRICTION_OPERATOR_LABELS,
+    integer_encoding_labels, float_size_labels,
 };
 use crate::event::EditField;
 
@@ -139,6 +139,12 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             // Buffer input steps are shown in the status bar.
             _ => {}
         }
+    }
+    if let Some(us) = &app.unit_edit_state {
+        if let UnitEditStep::Review = &us.step {
+            render_unit_review(&us.units, frame);
+        }
+        // AddUnit step is shown in the status bar.
     }
 }
 
@@ -317,6 +323,17 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
             spans.push(Span::styled(buffer.clone(), theme::detail_value()));
             spans.push(Span::styled("_", theme::dim()));
             spans.push(Span::styled("  Enter:Confirm  Esc:Cancel", theme::dim()));
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            return;
+        }
+    }
+
+    if let Some(us) = &app.unit_edit_state {
+        if let UnitEditStep::AddUnit { buffer } = &us.step {
+            spans.push(Span::styled(" Unit value: ", theme::section_header()));
+            spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+            spans.push(Span::styled("_", theme::dim()));
+            spans.push(Span::styled("  Enter:Add  Esc:Back", theme::dim()));
             frame.render_widget(Paragraph::new(Line::from(spans)), area);
             return;
         }
@@ -683,6 +700,7 @@ fn render_help_overlay(frame: &mut Frame) {
         ("  R", "Edit restriction criteria (Container with base)"),
         ("  L", "Set entry bit offset (Container)"),
         ("  K", "Edit calibrator (Integer / Float type with encoding)"),
+        ("  U", "Edit unit set (ParameterType / ArgumentType)"),
         ("  g", "Add argument to MetaCommand"),
         ("  G", "Remove last MetaCommand argument"),
     ];
@@ -706,6 +724,39 @@ fn render_help_overlay(frame: &mut Frame) {
         })
         .collect();
 
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_unit_review(units: &[xtce_core::model::types::Unit], frame: &mut Frame) {
+    let area = centered_rect(50, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Unit Set — a:Add  d:Remove last  Enter:Commit  Esc:Discard ")
+        .border_style(Style::default().fg(theme::BORDER_FOCUSED));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line<'static>> = if units.is_empty() {
+        vec![Line::from(Span::styled(
+            "  (no units — press 'a' to add)",
+            theme::dim(),
+        ))]
+    } else {
+        units
+            .iter()
+            .map(|u| Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(u.value.clone(), theme::detail_value()),
+            ]))
+            .collect()
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter to commit, Esc to discard all changes",
+        theme::dim(),
+    )));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
