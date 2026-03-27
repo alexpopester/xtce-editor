@@ -561,6 +561,7 @@ fn detail_sequence_container(
         if let Some(rc) = &bc.restriction_criteria {
             lines.push(field("  Restriction:", fmt_restriction(rc)));
         }
+        lines.push(note("  R: edit restriction criteria"));
     }
 
     // Collect ancestor entry layers (oldest ancestor first).

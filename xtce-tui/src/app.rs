@@ -116,17 +116,27 @@ pub enum CreateStep {
     },
 }
 
-/// State for the entry-add picker (adding a ParameterRef or ArgumentRef to an entry list).
+/// Which step of the entry-add flow is active.
+#[derive(Debug, Clone)]
+pub enum EntryAddStep {
+    /// Choose entry type: ParameterRef / ContainerRef / FixedValue (containers only).
+    ContainerTypeSelect { cursor: usize },
+    /// Pick a parameter to add as a ParameterRefEntry.
+    ParameterPicker { filter: String, items: Vec<(String, String)>, cursor: usize },
+    /// Pick a container to add as a ContainerRefEntry.
+    ContainerPicker { filter: String, items: Vec<(String, String)>, cursor: usize },
+    /// Enter size in bits for a FixedValueEntry (digits only).
+    FixedValueSizePrompt { buffer: String },
+    /// Pick an argument to add as an ArgumentRefEntry (MetaCommand only).
+    ArgumentPicker { filter: String, items: Vec<(String, String)>, cursor: usize },
+}
+
+/// State for the entry-add flow.
 #[derive(Debug, Clone)]
 pub struct EntryAddState {
-    /// The container or MetaCommand being edited.
+    /// The container or MetaCommand whose entry list is being edited.
     pub node_id: NodeId,
-    /// Current filter string typed by the user.
-    pub filter: String,
-    /// `(display_label, value_string)` — all candidate entries.
-    pub items: Vec<(String, String)>,
-    /// Currently highlighted row in the filtered list.
-    pub cursor: usize,
+    pub step: EntryAddStep,
 }
 
 /// All state needed to drive the add-item wizard.
@@ -190,6 +200,34 @@ pub enum EnumEntryStep {
 pub struct EnumEntryState {
     pub node_id: NodeId,
     pub step: EnumEntryStep,
+}
+
+// ── Restriction criteria editing state ────────────────────────────────────────
+
+pub const RESTRICTION_OPERATOR_LABELS: &[&str] = &[
+    "== (Equal)",
+    "!= (Not equal)",
+    "<  (Less than)",
+    "<= (Less or equal)",
+    ">  (Greater than)",
+    ">= (Greater or equal)",
+];
+
+#[derive(Debug, Clone)]
+pub enum RestrictionEditStep {
+    /// Pick the parameter to compare against.
+    PickParameter { filter: String, items: Vec<(String, String)>, cursor: usize },
+    /// Pick the comparison operator.
+    PickOperator { parameter_ref: String, cursor: usize },
+    /// Enter the comparison value (free text).
+    EnterValue { parameter_ref: String, operator_cursor: usize, buffer: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct RestrictionEditState {
+    /// The SequenceContainer being edited.
+    pub node_id: NodeId,
+    pub step: RestrictionEditStep,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -262,6 +300,8 @@ pub struct App {
     pub encoding_state: Option<EncodingState>,
     /// Active enumeration entry editing state, or `None`.
     pub enum_entry_state: Option<EnumEntryState>,
+    /// Active restriction criteria editor, or `None`.
+    pub restriction_edit_state: Option<RestrictionEditState>,
 }
 
 impl App {
@@ -303,6 +343,7 @@ impl App {
             picker_state: None,
             encoding_state: None,
             enum_entry_state: None,
+            restriction_edit_state: None,
         }
     }
 
@@ -343,6 +384,20 @@ impl App {
                 Action::EnumEntryConfirm  => self.enum_entry_confirm_step(),
                 Action::EnumEntryChar(c)  => self.enum_entry_push_char(c),
                 Action::EnumEntryBackspace => self.enum_entry_pop_char(),
+                _ => {}
+            }
+            return;
+        }
+
+        // Restriction criteria editor intercepts all input.
+        if self.restriction_edit_state.is_some() {
+            match action {
+                Action::RestrictionEditCancel    => { self.restriction_edit_state = None; }
+                Action::RestrictionEditConfirm   => self.restriction_edit_confirm_step(),
+                Action::RestrictionEditMoveUp    => self.restriction_edit_move(-1),
+                Action::RestrictionEditMoveDown  => self.restriction_edit_move(1),
+                Action::RestrictionEditChar(c)   => self.restriction_edit_push_char(c),
+                Action::RestrictionEditBackspace => self.restriction_edit_pop_char(),
                 _ => {}
             }
             return;
@@ -501,6 +556,8 @@ impl App {
             Action::CycleDataSource    => self.cycle_data_source(),
             Action::ArgAddStart        => self.start_arg_add(),
             Action::ArgRemoveLast      => self.remove_last_argument(),
+            Action::ToggleReadOnly     => self.toggle_read_only(),
+            Action::RestrictionEditStart => self.start_restriction_edit(),
             Action::CreateStart  => self.start_create(),
             Action::DeleteStart  => self.start_delete(),
             Action::EntryAddStart   => self.start_entry_add(),
@@ -519,6 +576,9 @@ impl App {
             | Action::EncodingChar(_) | Action::EncodingBackspace | Action::EncodingCancel => {}
             Action::EnumEntryConfirm | Action::EnumEntryChar(_) | Action::EnumEntryBackspace
             | Action::EnumEntryCancel => {}
+            Action::RestrictionEditMoveUp | Action::RestrictionEditMoveDown
+            | Action::RestrictionEditConfirm | Action::RestrictionEditChar(_)
+            | Action::RestrictionEditBackspace | Action::RestrictionEditCancel => {}
         }
     }
 
@@ -659,6 +719,12 @@ impl App {
         if new_value.is_empty() {
             return;
         }
+        // For name edits, check for collision before applying.
+        if matches!(edit.field, EditField::Name) && self.rename_would_conflict(&edit.node_id, &new_value) {
+            self.save_error = Some(format!("'{}' already exists", new_value));
+            self.edit_state = Some(edit);
+            return;
+        }
         let new_node_id = self.apply_field_edit(&edit.node_id, &edit.field, new_value);
         self.dirty = true;
         self.save_error = None;
@@ -666,6 +732,40 @@ impl App {
         self.rebuild_tree();
         if let Some(id) = new_node_id {
             self.jump_to(id);
+        }
+    }
+
+    /// Returns `true` if renaming `node_id` to `new_name` would collide with
+    /// an existing sibling.
+    fn rename_would_conflict(&self, node_id: &NodeId, new_name: &str) -> bool {
+        match node_id {
+            NodeId::SpaceSystem(path) => {
+                let parent_path = &path[..path.len().saturating_sub(1)];
+                get_ss(&self.space_system, parent_path)
+                    .map(|p| p.sub_systems.iter().any(|s| s.name == new_name))
+                    .unwrap_or(false)
+            }
+            NodeId::TmParameterType(path, old_name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_ref())
+                .map(|tm| tm.parameter_types.contains_key(new_name) && new_name != old_name.as_str())
+                .unwrap_or(false),
+            NodeId::TmParameter(path, old_name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_ref())
+                .map(|tm| tm.parameters.contains_key(new_name) && new_name != old_name.as_str())
+                .unwrap_or(false),
+            NodeId::TmContainer(path, old_name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_ref())
+                .map(|tm| tm.containers.contains_key(new_name) && new_name != old_name.as_str())
+                .unwrap_or(false),
+            NodeId::CmdArgumentType(path, old_name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.command.as_ref())
+                .map(|cmd| cmd.argument_types.contains_key(new_name) && new_name != old_name.as_str())
+                .unwrap_or(false),
+            NodeId::CmdMetaCommand(path, old_name) => get_ss(&self.space_system, path)
+                .and_then(|ss| ss.command.as_ref())
+                .map(|cmd| cmd.meta_commands.contains_key(new_name) && new_name != old_name.as_str())
+                .unwrap_or(false),
+            _ => false,
         }
     }
 
@@ -734,6 +834,13 @@ impl App {
     fn apply_rename(&mut self, node_id: &NodeId, new_name: String) -> Option<NodeId> {
         match node_id {
             NodeId::SpaceSystem(path) => {
+                // Guard: sibling name collision.
+                let parent_path = &path[..path.len().saturating_sub(1)];
+                if let Some(parent) = get_ss(&self.space_system, parent_path) {
+                    if parent.sub_systems.iter().any(|s| s.name == new_name) {
+                        return None;
+                    }
+                }
                 let ss = get_ss_mut(&mut self.space_system, path)?;
                 ss.name = new_name.clone();
                 let mut new_path = path.clone();
@@ -745,6 +852,9 @@ impl App {
             NodeId::TmParameterType(path, old_name) => {
                 let tm = get_ss_mut(&mut self.space_system, path)
                     .and_then(|ss| ss.telemetry.as_mut())?;
+                if tm.parameter_types.contains_key(new_name.as_str()) {
+                    return None;
+                }
                 let mut entry = tm.parameter_types.shift_remove(old_name.as_str())?;
                 entry.set_name(new_name.clone());
                 tm.parameter_types.insert(new_name.clone(), entry);
@@ -753,6 +863,9 @@ impl App {
             NodeId::TmParameter(path, old_name) => {
                 let tm = get_ss_mut(&mut self.space_system, path)
                     .and_then(|ss| ss.telemetry.as_mut())?;
+                if tm.parameters.contains_key(new_name.as_str()) {
+                    return None;
+                }
                 let mut param = tm.parameters.shift_remove(old_name.as_str())?;
                 param.name = new_name.clone();
                 tm.parameters.insert(new_name.clone(), param);
@@ -761,6 +874,9 @@ impl App {
             NodeId::TmContainer(path, old_name) => {
                 let tm = get_ss_mut(&mut self.space_system, path)
                     .and_then(|ss| ss.telemetry.as_mut())?;
+                if tm.containers.contains_key(new_name.as_str()) {
+                    return None;
+                }
                 let mut c = tm.containers.shift_remove(old_name.as_str())?;
                 c.name = new_name.clone();
                 tm.containers.insert(new_name.clone(), c);
@@ -769,6 +885,9 @@ impl App {
             NodeId::CmdArgumentType(path, old_name) => {
                 let cmd = get_ss_mut(&mut self.space_system, path)
                     .and_then(|ss| ss.command.as_mut())?;
+                if cmd.argument_types.contains_key(new_name.as_str()) {
+                    return None;
+                }
                 let mut at = cmd.argument_types.shift_remove(old_name.as_str())?;
                 at.set_name(new_name.clone());
                 cmd.argument_types.insert(new_name.clone(), at);
@@ -777,6 +896,9 @@ impl App {
             NodeId::CmdMetaCommand(path, old_name) => {
                 let cmd = get_ss_mut(&mut self.space_system, path)
                     .and_then(|ss| ss.command.as_mut())?;
+                if cmd.meta_commands.contains_key(new_name.as_str()) {
+                    return None;
+                }
                 let mut mc = cmd.meta_commands.shift_remove(old_name.as_str())?;
                 mc.name = new_name.clone();
                 cmd.meta_commands.insert(new_name.clone(), mc);
@@ -1315,7 +1437,7 @@ impl App {
         let Some(node) = self.tree.get(self.cursor) else { return };
         let node_id = node.node_id.clone();
 
-        // Handle Enumerated type → enum entry flow
+        // Enumerated parameter/argument type → enum entry flow
         use xtce_core::model::telemetry::ParameterType as PT;
         use xtce_core::model::command::ArgumentType as AT;
         let is_enum = match &node_id {
@@ -1339,126 +1461,287 @@ impl App {
             return;
         }
 
-        let items = match &node_id {
-            NodeId::TmContainer(path, _) => {
-                // Picker shows all Parameters in the same SpaceSystem.
-                let mut out = Vec::new();
-                if let Some(ss) = get_ss(&self.space_system, path) {
-                    if let Some(tm) = &ss.telemetry {
-                        for name in tm.parameters.keys() {
-                            out.push((name.clone(), name.clone()));
-                        }
-                    }
-                }
-                out
+        match &node_id {
+            NodeId::TmContainer(_, _) => {
+                // Show entry type selector first (ParameterRef / ContainerRef / FixedValue)
+                self.entry_add_state = Some(EntryAddState {
+                    node_id,
+                    step: EntryAddStep::ContainerTypeSelect { cursor: 0 },
+                });
             }
             NodeId::CmdMetaCommand(path, mc_name) => {
-                // Picker shows the MetaCommand's own argument_list.
-                let mut out = Vec::new();
-                if let Some(mc) = get_ss(&self.space_system, path)
-                    .and_then(|ss| ss.command.as_ref())
-                    .and_then(|cmd| cmd.meta_commands.get(mc_name.as_str()))
-                {
-                    for arg in &mc.argument_list {
-                        let label = if let Some(d) = &arg.short_description {
-                            format!("{} — {}", arg.name, d)
-                        } else {
-                            format!("{} ({})", arg.name, arg.argument_type_ref)
-                        };
-                        out.push((label, arg.name.clone()));
+                // MetaCommand: go straight to ArgumentRef picker
+                let items = self.build_argument_picker_items(path, mc_name);
+                self.entry_add_state = Some(EntryAddState {
+                    node_id,
+                    step: EntryAddStep::ArgumentPicker { filter: String::new(), items, cursor: 0 },
+                });
+            }
+            _ => {} // not an editable entry-list node
+        }
+    }
+
+    fn build_parameter_picker_items(&self, path: &SsPath) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let Some(ss) = get_ss(&self.space_system, path) {
+            if let Some(tm) = &ss.telemetry {
+                for name in tm.parameters.keys() {
+                    out.push((name.clone(), name.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    fn build_container_picker_items(&self, path: &SsPath, exclude: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let Some(ss) = get_ss(&self.space_system, path) {
+            if let Some(tm) = &ss.telemetry {
+                for name in tm.containers.keys() {
+                    if name != exclude {
+                        out.push((name.clone(), name.clone()));
                     }
                 }
-                out
             }
-            _ => return, // not an editable entry-list node
-        };
+        }
+        out
+    }
 
-        self.entry_add_state = Some(EntryAddState {
-            node_id,
-            filter: String::new(),
-            items,
-            cursor: 0,
-        });
+    fn build_argument_picker_items(&self, path: &SsPath, mc_name: &str) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if let Some(mc) = get_ss(&self.space_system, path)
+            .and_then(|ss| ss.command.as_ref())
+            .and_then(|cmd| cmd.meta_commands.get(mc_name))
+        {
+            for arg in &mc.argument_list {
+                let label = if let Some(d) = &arg.short_description {
+                    format!("{} — {}", arg.name, d)
+                } else {
+                    format!("{} ({})", arg.name, arg.argument_type_ref)
+                };
+                out.push((label, arg.name.clone()));
+            }
+        }
+        out
     }
 
     fn entry_add_move(&mut self, delta: i64) {
         let Some(ea) = self.entry_add_state.as_mut() else { return };
-        let count = filtered_count(&ea.items, &ea.filter);
-        if count > 0 {
-            let new = (ea.cursor as i64 + delta).clamp(0, count as i64 - 1) as usize;
-            ea.cursor = new;
+        match &mut ea.step {
+            EntryAddStep::ContainerTypeSelect { cursor } => {
+                *cursor = (*cursor as i64 + delta).clamp(0, 2) as usize;
+            }
+            EntryAddStep::ParameterPicker { filter, items, cursor }
+            | EntryAddStep::ContainerPicker { filter, items, cursor }
+            | EntryAddStep::ArgumentPicker { filter, items, cursor } => {
+                let count = filtered_count(items, filter);
+                if count > 0 {
+                    *cursor = (*cursor as i64 + delta).clamp(0, count as i64 - 1) as usize;
+                }
+            }
+            EntryAddStep::FixedValueSizePrompt { .. } => {}
         }
     }
 
     fn entry_add_push_char(&mut self, c: char) {
         let Some(ea) = self.entry_add_state.as_mut() else { return };
-        if c == 'j' {
-            let count = filtered_count(&ea.items, &ea.filter);
-            if count > 0 {
-                ea.cursor = (ea.cursor + 1).min(count - 1);
+        match &mut ea.step {
+            EntryAddStep::ContainerTypeSelect { cursor } => {
+                if c == 'j' { *cursor = (*cursor + 1).min(2); }
+                else if c == 'k' { *cursor = cursor.saturating_sub(1); }
             }
-        } else if c == 'k' {
-            ea.cursor = ea.cursor.saturating_sub(1);
-        } else {
-            ea.filter.push(c);
-            ea.cursor = 0;
+            EntryAddStep::ParameterPicker { filter, items, cursor }
+            | EntryAddStep::ContainerPicker { filter, items, cursor }
+            | EntryAddStep::ArgumentPicker { filter, items, cursor } => {
+                if c == 'j' {
+                    let count = filtered_count(items, filter);
+                    if count > 0 { *cursor = (*cursor + 1).min(count - 1); }
+                } else if c == 'k' {
+                    *cursor = cursor.saturating_sub(1);
+                } else {
+                    filter.push(c);
+                    *cursor = 0;
+                }
+            }
+            EntryAddStep::FixedValueSizePrompt { buffer } => {
+                if c.is_ascii_digit() { buffer.push(c); }
+            }
         }
     }
 
     fn entry_add_pop_char(&mut self) {
         let Some(ea) = self.entry_add_state.as_mut() else { return };
-        ea.filter.pop();
-        ea.cursor = 0;
+        match &mut ea.step {
+            EntryAddStep::ContainerTypeSelect { .. } => {}
+            EntryAddStep::ParameterPicker { filter, cursor, .. }
+            | EntryAddStep::ContainerPicker { filter, cursor, .. }
+            | EntryAddStep::ArgumentPicker { filter, cursor, .. } => {
+                filter.pop();
+                *cursor = 0;
+            }
+            EntryAddStep::FixedValueSizePrompt { buffer } => { buffer.pop(); }
+        }
     }
 
     fn commit_entry_add(&mut self) {
         let Some(ea) = self.entry_add_state.take() else { return };
-        let q = ea.filter.to_lowercase();
-        let filtered: Vec<_> = ea
-            .items
-            .iter()
-            .filter(|(label, _)| q.is_empty() || label.to_lowercase().contains(&q))
-            .collect();
-        if filtered.is_empty() {
-            return;
-        }
-        let idx = ea.cursor.min(filtered.len() - 1);
-        let value = filtered[idx].1.clone();
+        let node_id = ea.node_id;
 
-        match &ea.node_id {
-            NodeId::TmContainer(path, name) => {
-                use xtce_core::model::container::{ParameterRefEntry, SequenceEntry};
-                if let Some(c) = get_ss_mut(&mut self.space_system, path)
-                    .and_then(|ss| ss.telemetry.as_mut())
-                    .and_then(|tm| tm.containers.get_mut(name.as_str()))
-                {
-                    c.entry_list.push(SequenceEntry::ParameterRef(ParameterRefEntry {
-                        parameter_ref: value,
-                        location: None,
-                        include_condition: None,
-                    }));
+        match ea.step {
+            EntryAddStep::ContainerTypeSelect { cursor } => {
+                // Advance to the appropriate next step.
+                match cursor {
+                    0 => {
+                        // ParameterRef
+                        let items = if let NodeId::TmContainer(path, _) = &node_id {
+                            self.build_parameter_picker_items(path)
+                        } else { Vec::new() };
+                        self.entry_add_state = Some(EntryAddState {
+                            node_id,
+                            step: EntryAddStep::ParameterPicker { filter: String::new(), items, cursor: 0 },
+                        });
+                    }
+                    1 => {
+                        // ContainerRef
+                        let items = if let NodeId::TmContainer(path, name) = &node_id {
+                            self.build_container_picker_items(path, name)
+                        } else { Vec::new() };
+                        self.entry_add_state = Some(EntryAddState {
+                            node_id,
+                            step: EntryAddStep::ContainerPicker { filter: String::new(), items, cursor: 0 },
+                        });
+                    }
+                    _ => {
+                        // FixedValue
+                        self.entry_add_state = Some(EntryAddState {
+                            node_id,
+                            step: EntryAddStep::FixedValueSizePrompt { buffer: String::new() },
+                        });
+                    }
                 }
             }
-            NodeId::CmdMetaCommand(path, mc_name) => {
-                use xtce_core::model::command::{ArgumentRefEntry, CommandContainer, CommandEntry};
-                if let Some(mc) = get_ss_mut(&mut self.space_system, path)
-                    .and_then(|ss| ss.command.as_mut())
-                    .and_then(|cmd| cmd.meta_commands.get_mut(mc_name.as_str()))
-                {
-                    let cc = mc.command_container.get_or_insert_with(|| CommandContainer {
-                        name: format!("{}Container", mc_name),
-                        base_container: None,
-                        entry_list: Vec::new(),
+            EntryAddStep::ParameterPicker { filter, items, cursor } => {
+                let value = pick_from_filtered(&items, &filter, cursor);
+                if let Some(value) = value {
+                    self.do_add_parameter_ref(&node_id, value);
+                } else {
+                    self.entry_add_state = Some(EntryAddState {
+                        node_id,
+                        step: EntryAddStep::ParameterPicker { filter, items, cursor },
                     });
-                    cc.entry_list.push(CommandEntry::ArgumentRef(ArgumentRefEntry {
-                        argument_ref: value,
-                        location: None,
-                    }));
                 }
             }
-            _ => return,
+            EntryAddStep::ContainerPicker { filter, items, cursor } => {
+                let value = pick_from_filtered(&items, &filter, cursor);
+                if let Some(value) = value {
+                    self.do_add_container_ref(&node_id, value);
+                } else {
+                    self.entry_add_state = Some(EntryAddState {
+                        node_id,
+                        step: EntryAddStep::ContainerPicker { filter, items, cursor },
+                    });
+                }
+            }
+            EntryAddStep::FixedValueSizePrompt { buffer } => {
+                match buffer.trim().parse::<u32>() {
+                    Ok(size) if size > 0 => self.do_add_fixed_value(&node_id, size),
+                    _ => {
+                        self.entry_add_state = Some(EntryAddState {
+                            node_id,
+                            step: EntryAddStep::FixedValueSizePrompt { buffer },
+                        });
+                    }
+                }
+            }
+            EntryAddStep::ArgumentPicker { filter, items, cursor } => {
+                let value = pick_from_filtered(&items, &filter, cursor);
+                if let Some(value) = value {
+                    self.do_add_argument_ref(&node_id, value);
+                } else {
+                    self.entry_add_state = Some(EntryAddState {
+                        node_id,
+                        step: EntryAddStep::ArgumentPicker { filter, items, cursor },
+                    });
+                }
+            }
         }
+    }
 
+    fn do_add_parameter_ref(&mut self, node_id: &NodeId, param_ref: String) {
+        use xtce_core::model::container::{ParameterRefEntry, SequenceEntry};
+        if let NodeId::TmContainer(path, name) = node_id {
+            if let Some(c) = get_ss_mut(&mut self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_mut())
+                .and_then(|tm| tm.containers.get_mut(name.as_str()))
+            {
+                c.entry_list.push(SequenceEntry::ParameterRef(ParameterRefEntry {
+                    parameter_ref: param_ref,
+                    location: None,
+                    include_condition: None,
+                }));
+            }
+        }
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        self.rebuild_tree();
+    }
+
+    fn do_add_container_ref(&mut self, node_id: &NodeId, container_ref: String) {
+        use xtce_core::model::container::{ContainerRefEntry, SequenceEntry};
+        if let NodeId::TmContainer(path, name) = node_id {
+            if let Some(c) = get_ss_mut(&mut self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_mut())
+                .and_then(|tm| tm.containers.get_mut(name.as_str()))
+            {
+                c.entry_list.push(SequenceEntry::ContainerRef(ContainerRefEntry {
+                    container_ref,
+                    location: None,
+                    include_condition: None,
+                }));
+            }
+        }
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        self.rebuild_tree();
+    }
+
+    fn do_add_fixed_value(&mut self, node_id: &NodeId, size_in_bits: u32) {
+        use xtce_core::model::container::{FixedValueEntry, SequenceEntry};
+        if let NodeId::TmContainer(path, name) = node_id {
+            if let Some(c) = get_ss_mut(&mut self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_mut())
+                .and_then(|tm| tm.containers.get_mut(name.as_str()))
+            {
+                c.entry_list.push(SequenceEntry::FixedValue(FixedValueEntry {
+                    size_in_bits,
+                    binary_value: None,
+                    location: None,
+                }));
+            }
+        }
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        self.rebuild_tree();
+    }
+
+    fn do_add_argument_ref(&mut self, node_id: &NodeId, arg_ref: String) {
+        use xtce_core::model::command::{ArgumentRefEntry, CommandContainer, CommandEntry};
+        if let NodeId::CmdMetaCommand(path, mc_name) = node_id {
+            if let Some(mc) = get_ss_mut(&mut self.space_system, path)
+                .and_then(|ss| ss.command.as_mut())
+                .and_then(|cmd| cmd.meta_commands.get_mut(mc_name.as_str()))
+            {
+                let cc = mc.command_container.get_or_insert_with(|| CommandContainer {
+                    name: format!("{}Container", mc_name),
+                    base_container: None,
+                    entry_list: Vec::new(),
+                });
+                cc.entry_list.push(CommandEntry::ArgumentRef(ArgumentRefEntry {
+                    argument_ref: arg_ref,
+                    location: None,
+                }));
+            }
+        }
         self.dirty = true;
         self.validation_errors = xtce_core::validator::validate(&self.space_system);
         self.rebuild_tree();
@@ -1722,6 +2005,7 @@ impl App {
         if changed {
             self.dirty = true;
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
+            self.rebuild_tree();
         }
     }
 
@@ -1752,6 +2036,7 @@ impl App {
         if changed {
             self.dirty = true;
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
+            self.rebuild_tree();
         }
     }
 
@@ -1777,7 +2062,184 @@ impl App {
         if changed {
             self.dirty = true;
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
+            self.rebuild_tree();
         }
+    }
+
+    fn toggle_read_only(&mut self) {
+        use xtce_core::model::telemetry::ParameterProperties;
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let NodeId::TmParameter(path, name) = node.node_id.clone() else { return };
+        let changed = if let Some(p) = get_ss_mut(&mut self.space_system, &path)
+            .and_then(|ss| ss.telemetry.as_mut())
+            .and_then(|tm| tm.parameters.get_mut(name.as_str()))
+        {
+            let props = p.parameter_properties.get_or_insert_with(ParameterProperties::default);
+            props.read_only = !props.read_only;
+            true
+        } else { false };
+        if changed {
+            self.dirty = true;
+            self.validation_errors = xtce_core::validator::validate(&self.space_system);
+            self.rebuild_tree();
+        }
+    }
+
+    // ── Restriction criteria editor ───────────────────────────────────────────
+
+    fn start_restriction_edit(&mut self) {
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let NodeId::TmContainer(path, _) = node.node_id.clone() else { return };
+        // Only offer the editor when a base container is already set.
+        let has_base = get_ss(&self.space_system, &path)
+            .and_then(|ss| ss.telemetry.as_ref())
+            .and_then(|tm| {
+                if let NodeId::TmContainer(_, name) = &node.node_id {
+                    tm.containers.get(name.as_str())
+                } else { None }
+            })
+            .map(|c| c.base_container.is_some())
+            .unwrap_or(false);
+        if !has_base { return; }
+
+        // Build parameter picker items (parameters from this SpaceSystem).
+        let items = self.build_parameter_picker_items(&path);
+        self.restriction_edit_state = Some(RestrictionEditState {
+            node_id: node.node_id.clone(),
+            step: RestrictionEditStep::PickParameter { filter: String::new(), items, cursor: 0 },
+        });
+    }
+
+    fn restriction_edit_move(&mut self, delta: i64) {
+        let Some(res) = self.restriction_edit_state.as_mut() else { return };
+        match &mut res.step {
+            RestrictionEditStep::PickParameter { filter, items, cursor } => {
+                let count = filtered_count(items, filter);
+                if count > 0 {
+                    *cursor = (*cursor as i64 + delta).clamp(0, count as i64 - 1) as usize;
+                }
+            }
+            RestrictionEditStep::PickOperator { cursor, .. } => {
+                let max = RESTRICTION_OPERATOR_LABELS.len() - 1;
+                *cursor = (*cursor as i64 + delta).clamp(0, max as i64) as usize;
+            }
+            RestrictionEditStep::EnterValue { .. } => {}
+        }
+    }
+
+    fn restriction_edit_push_char(&mut self, c: char) {
+        let Some(res) = self.restriction_edit_state.as_mut() else { return };
+        match &mut res.step {
+            RestrictionEditStep::PickParameter { filter, items, cursor } => {
+                if c == 'j' {
+                    let count = filtered_count(items, filter);
+                    if count > 0 { *cursor = (*cursor + 1).min(count - 1); }
+                } else if c == 'k' {
+                    *cursor = cursor.saturating_sub(1);
+                } else {
+                    filter.push(c);
+                    *cursor = 0;
+                }
+            }
+            RestrictionEditStep::PickOperator { cursor, .. } => {
+                let max = RESTRICTION_OPERATOR_LABELS.len() - 1;
+                if c == 'j' { *cursor = (*cursor + 1).min(max); }
+                else if c == 'k' { *cursor = cursor.saturating_sub(1); }
+            }
+            RestrictionEditStep::EnterValue { buffer, .. } => { buffer.push(c); }
+        }
+    }
+
+    fn restriction_edit_pop_char(&mut self) {
+        let Some(res) = self.restriction_edit_state.as_mut() else { return };
+        match &mut res.step {
+            RestrictionEditStep::PickParameter { filter, cursor, .. } => {
+                filter.pop();
+                *cursor = 0;
+            }
+            RestrictionEditStep::PickOperator { .. } => {}
+            RestrictionEditStep::EnterValue { buffer, .. } => { buffer.pop(); }
+        }
+    }
+
+    fn restriction_edit_confirm_step(&mut self) {
+        let Some(res) = self.restriction_edit_state.take() else { return };
+        let node_id = res.node_id;
+        match res.step {
+            RestrictionEditStep::PickParameter { filter, items, cursor } => {
+                let value = pick_from_filtered(&items, &filter, cursor);
+                if let Some(param_ref) = value {
+                    self.restriction_edit_state = Some(RestrictionEditState {
+                        node_id,
+                        step: RestrictionEditStep::PickOperator { parameter_ref: param_ref, cursor: 0 },
+                    });
+                } else {
+                    self.restriction_edit_state = Some(RestrictionEditState {
+                        node_id,
+                        step: RestrictionEditStep::PickParameter { filter, items, cursor },
+                    });
+                }
+            }
+            RestrictionEditStep::PickOperator { parameter_ref, cursor } => {
+                self.restriction_edit_state = Some(RestrictionEditState {
+                    node_id,
+                    step: RestrictionEditStep::EnterValue {
+                        parameter_ref,
+                        operator_cursor: cursor,
+                        buffer: String::new(),
+                    },
+                });
+            }
+            RestrictionEditStep::EnterValue { parameter_ref, operator_cursor, buffer } => {
+                let value = buffer.trim().to_string();
+                if value.is_empty() {
+                    self.restriction_edit_state = Some(RestrictionEditState {
+                        node_id,
+                        step: RestrictionEditStep::EnterValue { parameter_ref, operator_cursor, buffer },
+                    });
+                    return;
+                }
+                self.commit_restriction_criteria(&node_id, parameter_ref, operator_cursor, value);
+            }
+        }
+    }
+
+    fn commit_restriction_criteria(
+        &mut self,
+        node_id: &NodeId,
+        parameter_ref: String,
+        operator_cursor: usize,
+        value: String,
+    ) {
+        use xtce_core::model::container::{Comparison, ComparisonOperator, RestrictionCriteria};
+        let operator = match operator_cursor {
+            0 => ComparisonOperator::Equality,
+            1 => ComparisonOperator::Inequality,
+            2 => ComparisonOperator::LessThan,
+            3 => ComparisonOperator::LessThanOrEqual,
+            4 => ComparisonOperator::GreaterThan,
+            _ => ComparisonOperator::GreaterThanOrEqual,
+        };
+        if let NodeId::TmContainer(path, name) = node_id {
+            if let Some(c) = get_ss_mut(&mut self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_mut())
+                .and_then(|tm| tm.containers.get_mut(name.as_str()))
+            {
+                if let Some(base) = c.base_container.as_mut() {
+                    base.restriction_criteria = Some(RestrictionCriteria::Comparison(Comparison {
+                        parameter_ref,
+                        value,
+                        comparison_operator: operator,
+                        use_calibrated_value: false,
+                    }));
+                }
+            }
+        }
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        self.rebuild_tree();
     }
 
     // ── Encoding wizard ───────────────────────────────────────────────────────
@@ -2198,6 +2660,20 @@ fn cursor_to_float_size(cursor: usize) -> xtce_core::model::types::FloatSizeInBi
         1 => FloatSizeInBits::F64,
         2 => FloatSizeInBits::F128,
         _ => FloatSizeInBits::F32,
+    }
+}
+
+/// Pick a value from a filtered list.  Returns `None` if the filtered list is empty.
+fn pick_from_filtered(items: &[(String, String)], filter: &str, cursor: usize) -> Option<String> {
+    let q = filter.to_lowercase();
+    let filtered: Vec<_> = items
+        .iter()
+        .filter(|(label, _)| q.is_empty() || label.to_lowercase().contains(&q))
+        .collect();
+    if filtered.is_empty() {
+        None
+    } else {
+        Some(filtered[cursor.min(filtered.len() - 1)].1.clone())
     }
 }
 

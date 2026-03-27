@@ -19,7 +19,10 @@ use ratatui::{
 
 use xtce_core::ValidationError;
 
-use crate::app::{App, CreateStep, Focus, TypeVariant, integer_encoding_labels, float_size_labels};
+use crate::app::{
+    App, CreateStep, EntryAddStep, Focus, RestrictionEditStep, TypeVariant,
+    RESTRICTION_OPERATOR_LABELS, integer_encoding_labels, float_size_labels,
+};
 use crate::event::EditField;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,12 +66,37 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         }
     }
     if let Some(ea) = &app.entry_add_state {
-        let title = match &ea.node_id {
-            tree::NodeId::TmContainer(_, _) => "Add ParameterRef entry",
-            tree::NodeId::CmdMetaCommand(_, _) => "Add ArgumentRef entry",
-            _ => "Add entry",
-        };
-        render_picker_overlay(title, &ea.filter, &ea.items, ea.cursor, frame);
+        match &ea.step {
+            EntryAddStep::ContainerTypeSelect { cursor } => {
+                render_list_select(
+                    "Add entry — select type",
+                    &["ParameterRef", "ContainerRef", "FixedValue"],
+                    *cursor,
+                    frame,
+                );
+            }
+            EntryAddStep::ParameterPicker { filter, items, cursor } => {
+                render_picker_overlay("Add ParameterRef entry", filter, items, *cursor, frame);
+            }
+            EntryAddStep::ContainerPicker { filter, items, cursor } => {
+                render_picker_overlay("Add ContainerRef entry", filter, items, *cursor, frame);
+            }
+            EntryAddStep::ArgumentPicker { filter, items, cursor } => {
+                render_picker_overlay("Add ArgumentRef entry", filter, items, *cursor, frame);
+            }
+            EntryAddStep::FixedValueSizePrompt { .. } => {} // shown in status bar
+        }
+    }
+    if let Some(res) = &app.restriction_edit_state {
+        match &res.step {
+            RestrictionEditStep::PickParameter { filter, items, cursor } => {
+                render_picker_overlay("Restriction: pick parameter", filter, items, *cursor, frame);
+            }
+            RestrictionEditStep::PickOperator { cursor, .. } => {
+                render_list_select("Restriction: pick operator", RESTRICTION_OPERATOR_LABELS, *cursor, frame);
+            }
+            RestrictionEditStep::EnterValue { .. } => {} // shown in status bar
+        }
     }
     if let Some(ps) = &app.picker_state {
         let title = match ps.purpose {
@@ -226,6 +254,35 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
                 frame.render_widget(Paragraph::new(Line::from(spans)), area);
                 return;
             }
+        }
+    }
+
+    if let Some(ea) = &app.entry_add_state {
+        if let EntryAddStep::FixedValueSizePrompt { buffer } = &ea.step {
+            spans.push(Span::styled(" Fixed value size in bits: ", theme::section_header()));
+            spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+            spans.push(Span::styled("_", theme::dim()));
+            spans.push(Span::styled("  Enter:Confirm  Esc:Cancel", theme::dim()));
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            return;
+        }
+    }
+
+    if let Some(res) = &app.restriction_edit_state {
+        if let RestrictionEditStep::EnterValue { parameter_ref, operator_cursor, buffer } = &res.step {
+            let op_label = RESTRICTION_OPERATOR_LABELS
+                .get(*operator_cursor)
+                .copied()
+                .unwrap_or("==");
+            spans.push(Span::styled(
+                format!(" Restriction value  ({} {}): ", parameter_ref, op_label),
+                theme::section_header(),
+            ));
+            spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+            spans.push(Span::styled("_", theme::dim()));
+            spans.push(Span::styled("  Enter:Confirm  Esc:Cancel", theme::dim()));
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            return;
         }
     }
 
@@ -545,6 +602,8 @@ fn render_help_overlay(frame: &mut Frame) {
         ("  t", "Change type reference (Parameter)"),
         ("  B", "Toggle abstract flag"),
         ("  D", "Cycle data source (Parameter)"),
+        ("  P", "Toggle read-only flag (Parameter)"),
+        ("  R", "Edit restriction criteria (Container with base)"),
         ("  g", "Add argument to MetaCommand"),
         ("  G", "Remove last MetaCommand argument"),
     ];

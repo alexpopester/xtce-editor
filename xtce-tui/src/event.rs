@@ -140,6 +140,16 @@ pub enum Action {
     EnumEntryChar(char),
     EnumEntryBackspace,
     EnumEntryCancel,
+    // Toggle parameter read-only flag
+    ToggleReadOnly,
+    // Restriction criteria editor (containers)
+    RestrictionEditStart,
+    RestrictionEditMoveUp,
+    RestrictionEditMoveDown,
+    RestrictionEditConfirm,
+    RestrictionEditChar(char),
+    RestrictionEditBackspace,
+    RestrictionEditCancel,
 }
 
 /// Map a raw crossterm [`KeyEvent`] to an [`Action`] in normal mode.
@@ -192,6 +202,8 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('D'), _) => Some(Action::CycleDataSource),
         (KeyCode::Char('g'), _) => Some(Action::ArgAddStart),
         (KeyCode::Char('G'), _) => Some(Action::ArgRemoveLast),
+        (KeyCode::Char('P'), _) => Some(Action::ToggleReadOnly),
+        (KeyCode::Char('R'), _) => Some(Action::RestrictionEditStart),
         // Overlays
         (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
@@ -305,6 +317,23 @@ pub fn encoding_key_to_action(key: KeyEvent) -> Option<Action> {
             if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
         {
             Some(Action::EncodingChar(c))
+        }
+        _ => None,
+    }
+}
+
+pub fn restriction_edit_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::RestrictionEditCancel),
+        (KeyCode::Enter, _) => Some(Action::RestrictionEditConfirm),
+        (KeyCode::Backspace, _) => Some(Action::RestrictionEditBackspace),
+        (KeyCode::Up, _) => Some(Action::RestrictionEditMoveUp),
+        (KeyCode::Down, _) => Some(Action::RestrictionEditMoveDown),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::RestrictionEditChar(c))
         }
         _ => None,
     }
