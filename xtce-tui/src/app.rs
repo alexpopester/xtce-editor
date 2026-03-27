@@ -202,6 +202,23 @@ pub struct EnumEntryState {
     pub step: EnumEntryStep,
 }
 
+// ── Entry location editing state ──────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub enum EntryLocationStep {
+    /// Pick which entry in the list to set a location on.
+    /// `items` is `(display_label, entry_index_string)`.
+    PickEntry { items: Vec<(String, String)>, cursor: usize },
+    /// Enter the bit offset (integer, may be negative).
+    EnterOffset { entry_index: usize, entry_name: String, buffer: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct EntryLocationState {
+    pub node_id: NodeId,
+    pub step: EntryLocationStep,
+}
+
 // ── Restriction criteria editing state ────────────────────────────────────────
 
 pub const RESTRICTION_OPERATOR_LABELS: &[&str] = &[
@@ -302,6 +319,8 @@ pub struct App {
     pub enum_entry_state: Option<EnumEntryState>,
     /// Active restriction criteria editor, or `None`.
     pub restriction_edit_state: Option<RestrictionEditState>,
+    /// Active entry location editor, or `None`.
+    pub entry_location_state: Option<EntryLocationState>,
     /// Undo history: snapshots of `space_system` taken before each mutation.
     /// Most recent snapshot is at the back. Capped at 50 entries.
     pub undo_stack: VecDeque<SpaceSystem>,
@@ -349,6 +368,7 @@ impl App {
             encoding_state: None,
             enum_entry_state: None,
             restriction_edit_state: None,
+            entry_location_state: None,
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
         }
@@ -391,6 +411,20 @@ impl App {
                 Action::EnumEntryConfirm  => self.enum_entry_confirm_step(),
                 Action::EnumEntryChar(c)  => self.enum_entry_push_char(c),
                 Action::EnumEntryBackspace => self.enum_entry_pop_char(),
+                _ => {}
+            }
+            return;
+        }
+
+        // Entry location editor intercepts all input.
+        if self.entry_location_state.is_some() {
+            match action {
+                Action::EntryLocationCancel    => { self.entry_location_state = None; }
+                Action::EntryLocationConfirm   => self.entry_location_confirm_step(),
+                Action::EntryLocationMoveUp    => self.entry_location_move(-1),
+                Action::EntryLocationMoveDown  => self.entry_location_move(1),
+                Action::EntryLocationChar(c)   => self.entry_location_push_char(c),
+                Action::EntryLocationBackspace => self.entry_location_pop_char(),
                 _ => {}
             }
             return;
@@ -566,7 +600,8 @@ impl App {
             Action::ArgAddStart        => self.start_arg_add(),
             Action::ArgRemoveLast      => self.remove_last_argument(),
             Action::ToggleReadOnly     => self.toggle_read_only(),
-            Action::RestrictionEditStart => self.start_restriction_edit(),
+            Action::RestrictionEditStart  => self.start_restriction_edit(),
+            Action::EntryLocationStart    => self.start_entry_location(),
             Action::CreateStart  => self.start_create(),
             Action::DeleteStart  => self.start_delete(),
             Action::EntryAddStart   => self.start_entry_add(),
@@ -588,6 +623,9 @@ impl App {
             Action::RestrictionEditMoveUp | Action::RestrictionEditMoveDown
             | Action::RestrictionEditConfirm | Action::RestrictionEditChar(_)
             | Action::RestrictionEditBackspace | Action::RestrictionEditCancel => {}
+            Action::EntryLocationMoveUp | Action::EntryLocationMoveDown
+            | Action::EntryLocationConfirm | Action::EntryLocationChar(_)
+            | Action::EntryLocationBackspace | Action::EntryLocationCancel => {}
         }
     }
 
@@ -2315,6 +2353,125 @@ impl App {
                         comparison_operator: operator,
                         use_calibrated_value: false,
                     }));
+                }
+            }
+        }
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        self.rebuild_tree();
+    }
+
+    // ── Entry location editor ─────────────────────────────────────────────────
+
+    fn start_entry_location(&mut self) {
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let NodeId::TmContainer(path, name) = node.node_id.clone() else { return };
+        let entry_list = get_ss(&self.space_system, &path)
+            .and_then(|ss| ss.telemetry.as_ref())
+            .and_then(|tm| tm.containers.get(name.as_str()))
+            .map(|c| &c.entry_list);
+        let Some(entry_list) = entry_list else { return };
+        if entry_list.is_empty() { return; }
+
+        let items: Vec<(String, String)> = entry_list
+            .iter()
+            .enumerate()
+            .map(|(i, e)| {
+                use xtce_core::model::container::SequenceEntry;
+                let label = match e {
+                    SequenceEntry::ParameterRef(r) => r.parameter_ref.clone(),
+                    SequenceEntry::ContainerRef(r) => format!("[{}]", r.container_ref),
+                    SequenceEntry::FixedValue(r) => format!("<fixed {}b>", r.size_in_bits),
+                    SequenceEntry::ArrayParameterRef(r) => format!("{}[]", r.parameter_ref),
+                };
+                (format!("{}: {}", i, label), i.to_string())
+            })
+            .collect();
+
+        self.entry_location_state = Some(EntryLocationState {
+            node_id: node.node_id.clone(),
+            step: EntryLocationStep::PickEntry { items, cursor: 0 },
+        });
+    }
+
+    fn entry_location_move(&mut self, delta: i64) {
+        let Some(els) = self.entry_location_state.as_mut() else { return };
+        if let EntryLocationStep::PickEntry { items, cursor } = &mut els.step {
+            let count = items.len();
+            if count > 0 {
+                *cursor = (*cursor as i64 + delta).clamp(0, count as i64 - 1) as usize;
+            }
+        }
+    }
+
+    fn entry_location_push_char(&mut self, c: char) {
+        let Some(els) = self.entry_location_state.as_mut() else { return };
+        match &mut els.step {
+            EntryLocationStep::PickEntry { items, cursor } => {
+                if c == 'j' { let n = items.len(); if n > 0 { *cursor = (*cursor + 1).min(n - 1); } }
+                else if c == 'k' { *cursor = cursor.saturating_sub(1); }
+            }
+            EntryLocationStep::EnterOffset { buffer, .. } => {
+                // Allow digits, '-' sign at start, and delete via backspace.
+                if c == '-' && buffer.is_empty() {
+                    buffer.push(c);
+                } else if c.is_ascii_digit() {
+                    buffer.push(c);
+                }
+            }
+        }
+    }
+
+    fn entry_location_pop_char(&mut self) {
+        let Some(els) = self.entry_location_state.as_mut() else { return };
+        if let EntryLocationStep::EnterOffset { buffer, .. } = &mut els.step {
+            buffer.pop();
+        }
+    }
+
+    fn entry_location_confirm_step(&mut self) {
+        let Some(els) = self.entry_location_state.take() else { return };
+        let node_id = els.node_id;
+        match els.step {
+            EntryLocationStep::PickEntry { items, cursor } => {
+                let idx = cursor.min(items.len().saturating_sub(1));
+                let entry_index: usize = items[idx].1.parse().unwrap_or(0);
+                let entry_name = items[idx].0.trim_start_matches(|c: char| c.is_ascii_digit() || c == ':' || c == ' ').to_string();
+                self.entry_location_state = Some(EntryLocationState {
+                    node_id,
+                    step: EntryLocationStep::EnterOffset {
+                        entry_index,
+                        entry_name,
+                        buffer: String::new(),
+                    },
+                });
+            }
+            EntryLocationStep::EnterOffset { entry_index, buffer, .. } => {
+                let trimmed = buffer.trim();
+                if trimmed.is_empty() || trimmed == "-" { return; }
+                let Ok(bit_offset) = trimmed.parse::<i64>() else { return };
+                self.commit_entry_location(&node_id, entry_index, bit_offset);
+            }
+        }
+    }
+
+    fn commit_entry_location(&mut self, node_id: &NodeId, entry_index: usize, bit_offset: i64) {
+        use xtce_core::model::container::{EntryLocation, ReferenceLocation, SequenceEntry};
+        self.push_undo_snapshot();
+        let loc = EntryLocation { reference_location: ReferenceLocation::ContainerStart, bit_offset };
+        if let NodeId::TmContainer(path, name) = node_id {
+            if let Some(c) = get_ss_mut(&mut self.space_system, path)
+                .and_then(|ss| ss.telemetry.as_mut())
+                .and_then(|tm| tm.containers.get_mut(name.as_str()))
+            {
+                if let Some(entry) = c.entry_list.get_mut(entry_index) {
+                    match entry {
+                        SequenceEntry::ParameterRef(e)     => e.location = Some(loc),
+                        SequenceEntry::ContainerRef(e)     => e.location = Some(loc),
+                        SequenceEntry::FixedValue(e)       => e.location = Some(loc),
+                        SequenceEntry::ArrayParameterRef(e) => e.location = Some(loc),
+                    }
                 }
             }
         }

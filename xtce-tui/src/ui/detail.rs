@@ -609,6 +609,7 @@ fn detail_sequence_container(
     if c.entry_list.is_empty() {
         lines.push(note("  (empty)"));
     } else {
+        lines.push(note("  L: set entry bit offset"));
         lines.push(Line::from(vec![
             Span::styled(format!("  {:<28}  {:>8}", "Name / Ref", "Bits"), theme::detail_label()),
         ]));
@@ -662,17 +663,22 @@ fn entry_label_and_bits(
     match entry {
         SequenceEntry::ParameterRef(e) => {
             let bits = resolve_param_bits(ss, root, &e.parameter_ref);
-            (e.parameter_ref.clone(), bits)
+            let label = fmt_entry_label(&e.parameter_ref, e.location.as_ref());
+            (label, bits)
         }
-        SequenceEntry::ContainerRef(e) => (format!("[{}]", e.container_ref), None),
+        SequenceEntry::ContainerRef(e) => {
+            (fmt_entry_label(&format!("[{}]", e.container_ref), e.location.as_ref()), None)
+        }
         SequenceEntry::FixedValue(e) => {
-            let label = match &e.binary_value {
+            let name = match &e.binary_value {
                 Some(v) => format!("<0x{}>", v),
                 None => "<fixed>".to_string(),
             };
-            (label, Some(e.size_in_bits))
+            (fmt_entry_label(&name, e.location.as_ref()), Some(e.size_in_bits))
         }
-        SequenceEntry::ArrayParameterRef(e) => (format!("{}[]", e.parameter_ref), None),
+        SequenceEntry::ArrayParameterRef(e) => {
+            (fmt_entry_label(&format!("{}[]", e.parameter_ref), e.location.as_ref()), None)
+        }
     }
 }
 
@@ -1171,6 +1177,20 @@ fn field(label: impl Into<String>, value: impl Into<String>) -> Line<'static> {
 
 fn note(text: impl Into<String>) -> Line<'static> {
     Line::from(Span::styled(text.into(), theme::dim()))
+}
+
+fn fmt_entry_label(name: &str, loc: Option<&xtce_core::model::container::EntryLocation>) -> String {
+    match loc {
+        None => name.to_string(),
+        Some(l) => {
+            use xtce_core::model::container::ReferenceLocation;
+            let ref_char = match l.reference_location {
+                ReferenceLocation::ContainerStart => '@',
+                ReferenceLocation::PreviousEntry  => '+',
+            };
+            format!("{} {}{}b", name, ref_char, l.bit_offset)
+        }
+    }
 }
 
 fn push_units(lines: &mut Vec<Line<'static>>, units: &[Unit]) {

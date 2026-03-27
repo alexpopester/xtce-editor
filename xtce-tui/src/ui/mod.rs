@@ -20,7 +20,7 @@ use ratatui::{
 use xtce_core::ValidationError;
 
 use crate::app::{
-    App, CreateStep, EntryAddStep, Focus, RestrictionEditStep, TypeVariant,
+    App, CreateStep, EntryAddStep, EntryLocationStep, Focus, RestrictionEditStep, TypeVariant,
     RESTRICTION_OPERATOR_LABELS, integer_encoding_labels, float_size_labels,
 };
 use crate::event::EditField;
@@ -97,6 +97,12 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             }
             RestrictionEditStep::EnterValue { .. } => {} // shown in status bar
         }
+    }
+    if let Some(els) = &app.entry_location_state {
+        if let EntryLocationStep::PickEntry { items, cursor } = &els.step {
+            render_picker_overlay("Set entry location — pick entry", "", items, *cursor, frame);
+        }
+        // EnterOffset is shown in the status bar.
     }
     if let Some(ps) = &app.picker_state {
         let title = match ps.purpose {
@@ -276,6 +282,20 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
                 .unwrap_or("==");
             spans.push(Span::styled(
                 format!(" Restriction value  ({} {}): ", parameter_ref, op_label),
+                theme::section_header(),
+            ));
+            spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+            spans.push(Span::styled("_", theme::dim()));
+            spans.push(Span::styled("  Enter:Confirm  Esc:Cancel", theme::dim()));
+            frame.render_widget(Paragraph::new(Line::from(spans)), area);
+            return;
+        }
+    }
+
+    if let Some(els) = &app.entry_location_state {
+        if let EntryLocationStep::EnterOffset { entry_name, buffer, .. } = &els.step {
+            spans.push(Span::styled(
+                format!(" Bit offset (containerStart) for {}: ", entry_name),
                 theme::section_header(),
             ));
             spans.push(Span::styled(buffer.clone(), theme::detail_value()));
@@ -606,6 +626,7 @@ fn render_help_overlay(frame: &mut Frame) {
         ("  D", "Cycle data source (Parameter)"),
         ("  P", "Toggle read-only flag (Parameter)"),
         ("  R", "Edit restriction criteria (Container with base)"),
+        ("  L", "Set entry bit offset (Container)"),
         ("  g", "Add argument to MetaCommand"),
         ("  G", "Remove last MetaCommand argument"),
     ];

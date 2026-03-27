@@ -59,6 +59,8 @@ fn run(app: &mut App, terminal: &mut tui::Ratatui) -> std::io::Result<()> {
                 event::encoding_key_to_action(key)
             } else if app.enum_entry_state.is_some() {
                 event::enum_entry_key_to_action(key)
+            } else if app.entry_location_state.is_some() {
+                event::entry_location_key_to_action(key)
             } else if app.restriction_edit_state.is_some() {
                 event::restriction_edit_key_to_action(key)
             } else if app.create_state.is_some() {

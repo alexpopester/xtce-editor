@@ -144,6 +144,14 @@ pub enum Action {
     EnumEntryChar(char),
     EnumEntryBackspace,
     EnumEntryCancel,
+    // Entry location editor (containers)
+    EntryLocationStart,
+    EntryLocationMoveUp,
+    EntryLocationMoveDown,
+    EntryLocationConfirm,
+    EntryLocationChar(char),
+    EntryLocationBackspace,
+    EntryLocationCancel,
     // Toggle parameter read-only flag
     ToggleReadOnly,
     // Restriction criteria editor (containers)
@@ -210,6 +218,7 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('G'), _) => Some(Action::ArgRemoveLast),
         (KeyCode::Char('P'), _) => Some(Action::ToggleReadOnly),
         (KeyCode::Char('R'), _) => Some(Action::RestrictionEditStart),
+        (KeyCode::Char('L'), _) => Some(Action::EntryLocationStart),
         // Overlays
         (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
@@ -323,6 +332,23 @@ pub fn encoding_key_to_action(key: KeyEvent) -> Option<Action> {
             if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
         {
             Some(Action::EncodingChar(c))
+        }
+        _ => None,
+    }
+}
+
+pub fn entry_location_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::EntryLocationCancel),
+        (KeyCode::Enter, _) => Some(Action::EntryLocationConfirm),
+        (KeyCode::Backspace, _) => Some(Action::EntryLocationBackspace),
+        (KeyCode::Up, _) => Some(Action::EntryLocationMoveUp),
+        (KeyCode::Down, _) => Some(Action::EntryLocationMoveDown),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::EntryLocationChar(c))
         }
         _ => None,
     }
