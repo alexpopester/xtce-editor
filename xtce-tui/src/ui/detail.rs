@@ -158,12 +158,11 @@ fn detail_space_system(ss: &SpaceSystem) -> Vec<Line<'static>> {
         lines.push(note("  No telemetry data"));
     }
     if let Some(cmd) = &ss.command {
+        let cmd_container_count = cmd.command_containers.len()
+            + cmd.meta_commands.values().filter(|mc| mc.command_container.is_some()).count();
         lines.push(field("  Argument types:", cmd.argument_types.len().to_string()));
         lines.push(field("  MetaCommands:", cmd.meta_commands.len().to_string()));
-        lines.push(field(
-            "  Cmd containers:",
-            cmd.command_containers.len().to_string(),
-        ));
+        lines.push(field("  Cmd containers:", cmd_container_count.to_string()));
     } else {
         lines.push(note("  No command data"));
     }
@@ -225,12 +224,14 @@ fn detail_cmd_section(cmd: Option<&CommandMetaData>) -> Vec<Line<'static>> {
     let Some(cmd) = cmd else {
         return vec![note("No command data")];
     };
+    let cmd_container_count = cmd.command_containers.len()
+        + cmd.meta_commands.values().filter(|mc| mc.command_container.is_some()).count();
     vec![
         heading("CommandMetaData"),
         sep(),
         field("Argument types:", cmd.argument_types.len().to_string()),
         field("MetaCommands:", cmd.meta_commands.len().to_string()),
-        field("Command containers:", cmd.command_containers.len().to_string()),
+        field("Command containers:", cmd_container_count.to_string()),
     ]
 }
 
