@@ -59,6 +59,10 @@ pub enum Action {
     SearchPrev,
     /// Exit search mode (keeps matches highlighted for navigation).
     SearchExit,
+    /// Undo the last mutation.
+    Undo,
+    /// Redo the last undone mutation.
+    Redo,
     /// Save the current SpaceSystem to disk.
     Save,
     /// Open an inline edit prompt for the given field on the selected node.
@@ -181,6 +185,8 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('i'), _) => Some(Action::EditStart(EditField::Name)),
         (KeyCode::Char('C'), _) => Some(Action::EditStart(EditField::ShortDescription)),
         // File operations
+        (KeyCode::Char('u'), _) => Some(Action::Undo),
+        (KeyCode::Char('r'), KeyModifiers::CONTROL) => Some(Action::Redo),
         (KeyCode::Char('r'), _) => Some(Action::Reload),
         (KeyCode::Char('s'), _) | (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
             Some(Action::Save)

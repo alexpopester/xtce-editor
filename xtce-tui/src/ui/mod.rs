@@ -580,6 +580,8 @@ fn render_help_overlay(frame: &mut Frame) {
         ("  x", "Remove last entry from container / MetaCommand"),
         ("", ""),
         ("File", ""),
+        ("  u", "Undo last change"),
+        ("  Ctrl+R", "Redo"),
         ("  r", "Reload from disk"),
         ("  s / Ctrl+W", "Save to disk"),
         ("", ""),

@@ -4,7 +4,7 @@
 //! the loaded [`SpaceSystem`], tree expansion state, cursor position,
 //! panel focus, and validation errors.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 
 use ratatui::widgets::ListState;
@@ -302,6 +302,11 @@ pub struct App {
     pub enum_entry_state: Option<EnumEntryState>,
     /// Active restriction criteria editor, or `None`.
     pub restriction_edit_state: Option<RestrictionEditState>,
+    /// Undo history: snapshots of `space_system` taken before each mutation.
+    /// Most recent snapshot is at the back. Capped at 50 entries.
+    pub undo_stack: VecDeque<SpaceSystem>,
+    /// Redo stack: snapshots pushed by `undo`. Cleared on any new mutation.
+    pub redo_stack: VecDeque<SpaceSystem>,
 }
 
 impl App {
@@ -344,6 +349,8 @@ impl App {
             encoding_state: None,
             enum_entry_state: None,
             restriction_edit_state: None,
+            undo_stack: VecDeque::new(),
+            redo_stack: VecDeque::new(),
         }
     }
 
@@ -546,6 +553,8 @@ impl App {
                 self.search_mode = false;
                 // Matches stay active so n/N can still navigate them.
             }
+            Action::Undo => self.undo(),
+            Action::Redo => self.redo(),
             Action::Save => self.save(),
             Action::EditStart(field) => self.start_edit(field),
             Action::ChangeTypeRefStart => self.start_change_type_ref(),
@@ -583,6 +592,41 @@ impl App {
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /// Snapshot the current `space_system` onto the undo stack before a mutation.
+    ///
+    /// Clears the redo stack (new branch), and caps history at 50 entries.
+    fn push_undo_snapshot(&mut self) {
+        if self.undo_stack.len() >= 50 {
+            self.undo_stack.pop_front();
+        }
+        self.undo_stack.push_back(self.space_system.clone());
+        self.redo_stack.clear();
+    }
+
+    fn undo(&mut self) {
+        let Some(prev) = self.undo_stack.pop_back() else { return };
+        let current = std::mem::replace(&mut self.space_system, prev);
+        if self.redo_stack.len() >= 50 {
+            self.redo_stack.pop_front();
+        }
+        self.redo_stack.push_back(current);
+        self.dirty = !self.undo_stack.is_empty() || self.dirty;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        self.rebuild_tree();
+    }
+
+    fn redo(&mut self) {
+        let Some(next) = self.redo_stack.pop_back() else { return };
+        let current = std::mem::replace(&mut self.space_system, next);
+        if self.undo_stack.len() >= 50 {
+            self.undo_stack.pop_front();
+        }
+        self.undo_stack.push_back(current);
+        self.dirty = true;
+        self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        self.rebuild_tree();
+    }
 
     fn move_cursor(&mut self, delta: i64) {
         match self.focus {
@@ -725,6 +769,7 @@ impl App {
             self.edit_state = Some(edit);
             return;
         }
+        self.push_undo_snapshot();
         let new_node_id = self.apply_field_edit(&edit.node_id, &edit.field, new_value);
         self.dirty = true;
         self.save_error = None;
@@ -971,6 +1016,8 @@ impl App {
                 self.search_query.clear();
                 self.dirty = false;
                 self.save_error = None;
+                self.undo_stack.clear();
+                self.redo_stack.clear();
                 self.validation_errors = xtce_core::validator::validate(&self.space_system);
                 self.rebuild_tree();
                 self.list_state.select(Some(0));
@@ -1276,6 +1323,7 @@ impl App {
         type_ref: Option<String>,
         target_name: Option<String>,
     ) {
+        self.push_undo_snapshot();
         let new_id: NodeId = match kind {
             CreateKind::SpaceSystem => {
                 if let Some(parent) = get_ss_mut(&mut self.space_system, &path) {
@@ -1378,6 +1426,7 @@ impl App {
 
     fn commit_delete(&mut self) {
         let Some(dc) = self.delete_confirm.take() else { return };
+        self.push_undo_snapshot();
         match &dc.node_id {
             NodeId::SpaceSystem(path) if !path.is_empty() => {
                 let name = path.last().unwrap().clone();
@@ -1668,6 +1717,7 @@ impl App {
     }
 
     fn do_add_parameter_ref(&mut self, node_id: &NodeId, param_ref: String) {
+        self.push_undo_snapshot();
         use xtce_core::model::container::{ParameterRefEntry, SequenceEntry};
         if let NodeId::TmContainer(path, name) = node_id {
             if let Some(c) = get_ss_mut(&mut self.space_system, path)
@@ -1687,6 +1737,7 @@ impl App {
     }
 
     fn do_add_container_ref(&mut self, node_id: &NodeId, container_ref: String) {
+        self.push_undo_snapshot();
         use xtce_core::model::container::{ContainerRefEntry, SequenceEntry};
         if let NodeId::TmContainer(path, name) = node_id {
             if let Some(c) = get_ss_mut(&mut self.space_system, path)
@@ -1706,6 +1757,7 @@ impl App {
     }
 
     fn do_add_fixed_value(&mut self, node_id: &NodeId, size_in_bits: u32) {
+        self.push_undo_snapshot();
         use xtce_core::model::container::{FixedValueEntry, SequenceEntry};
         if let NodeId::TmContainer(path, name) = node_id {
             if let Some(c) = get_ss_mut(&mut self.space_system, path)
@@ -1725,6 +1777,7 @@ impl App {
     }
 
     fn do_add_argument_ref(&mut self, node_id: &NodeId, arg_ref: String) {
+        self.push_undo_snapshot();
         use xtce_core::model::command::{ArgumentRefEntry, CommandContainer, CommandEntry};
         if let NodeId::CmdMetaCommand(path, mc_name) = node_id {
             if let Some(mc) = get_ss_mut(&mut self.space_system, path)
@@ -1754,6 +1807,8 @@ impl App {
         let Some(node) = self.tree.get(self.cursor) else { return };
         let node_id = node.node_id.clone();
 
+        // Snapshot before the pop (mutation happens inside the match arms).
+        let pre_snapshot = self.space_system.clone();
         let removed = match &node_id {
             NodeId::TmContainer(path, name) => {
                 get_ss_mut(&mut self.space_system, path)
@@ -1792,6 +1847,11 @@ impl App {
         };
 
         if removed {
+            if self.undo_stack.len() >= 50 {
+                self.undo_stack.pop_front();
+            }
+            self.undo_stack.push_back(pre_snapshot);
+            self.redo_stack.clear();
             self.dirty = true;
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
             self.rebuild_tree();
@@ -1911,6 +1971,7 @@ impl App {
         if filtered.is_empty() { return; }
         let idx = ps.cursor.min(filtered.len() - 1);
         let value = filtered[idx].1.clone();
+        self.push_undo_snapshot();
 
         match ps.purpose {
             PickerPurpose::ChangeTypeRef => {
@@ -1976,11 +2037,23 @@ impl App {
 
     // ── Scalar toggles ────────────────────────────────────────────────────────
 
+    /// Commit a pre-snapshot to the undo stack only if a mutation actually occurred.
+    fn commit_snapshot_if_changed(&mut self, pre: SpaceSystem, changed: bool) {
+        if changed {
+            if self.undo_stack.len() >= 50 {
+                self.undo_stack.pop_front();
+            }
+            self.undo_stack.push_back(pre);
+            self.redo_stack.clear();
+        }
+    }
+
     fn toggle_signed(&mut self) {
         use xtce_core::model::telemetry::ParameterType;
         use xtce_core::model::command::ArgumentType;
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
+        let pre = self.space_system.clone();
         let changed = match &node.node_id.clone() {
             NodeId::TmParameterType(path, name) => {
                 if let Some(ParameterType::Integer(t)) = get_ss_mut(&mut self.space_system, path)
@@ -2002,6 +2075,7 @@ impl App {
             }
             _ => false,
         };
+        self.commit_snapshot_if_changed(pre, changed);
         if changed {
             self.dirty = true;
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
@@ -2012,6 +2086,7 @@ impl App {
     fn toggle_abstract(&mut self) {
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
+        let pre = self.space_system.clone();
         let changed = match &node.node_id.clone() {
             NodeId::TmContainer(path, name) => {
                 if let Some(c) = get_ss_mut(&mut self.space_system, path)
@@ -2033,6 +2108,7 @@ impl App {
             }
             _ => false,
         };
+        self.commit_snapshot_if_changed(pre, changed);
         if changed {
             self.dirty = true;
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
@@ -2045,6 +2121,7 @@ impl App {
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
         let NodeId::TmParameter(path, name) = node.node_id.clone() else { return };
+        let pre = self.space_system.clone();
         let changed = if let Some(p) = get_ss_mut(&mut self.space_system, &path)
             .and_then(|ss| ss.telemetry.as_mut())
             .and_then(|tm| tm.parameters.get_mut(name.as_str()))
@@ -2059,6 +2136,7 @@ impl App {
             });
             true
         } else { false };
+        self.commit_snapshot_if_changed(pre, changed);
         if changed {
             self.dirty = true;
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
@@ -2071,6 +2149,7 @@ impl App {
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
         let NodeId::TmParameter(path, name) = node.node_id.clone() else { return };
+        let pre = self.space_system.clone();
         let changed = if let Some(p) = get_ss_mut(&mut self.space_system, &path)
             .and_then(|ss| ss.telemetry.as_mut())
             .and_then(|tm| tm.parameters.get_mut(name.as_str()))
@@ -2079,6 +2158,7 @@ impl App {
             props.read_only = !props.read_only;
             true
         } else { false };
+        self.commit_snapshot_if_changed(pre, changed);
         if changed {
             self.dirty = true;
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
@@ -2213,6 +2293,7 @@ impl App {
         operator_cursor: usize,
         value: String,
     ) {
+        self.push_undo_snapshot();
         use xtce_core::model::container::{Comparison, ComparisonOperator, RestrictionCriteria};
         let operator = match operator_cursor {
             0 => ComparisonOperator::Equality,
@@ -2366,6 +2447,7 @@ impl App {
         encoding: xtce_core::model::types::IntegerEncoding,
         size_in_bits: u32,
     ) {
+        self.push_undo_snapshot();
         use xtce_core::model::types::IntegerDataEncoding;
         use xtce_core::model::telemetry::ParameterType;
         use xtce_core::model::command::ArgumentType;
@@ -2408,6 +2490,7 @@ impl App {
         node_id: &NodeId,
         size: xtce_core::model::types::FloatSizeInBits,
     ) {
+        self.push_undo_snapshot();
         use xtce_core::model::types::{FloatDataEncoding, FloatEncoding};
         use xtce_core::model::telemetry::ParameterType;
         use xtce_core::model::command::ArgumentType;
@@ -2454,11 +2537,13 @@ impl App {
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
         let NodeId::CmdMetaCommand(path, mc_name) = node.node_id.clone() else { return };
+        let pre = self.space_system.clone();
         let removed = get_ss_mut(&mut self.space_system, &path)
             .and_then(|ss| ss.command.as_mut())
             .and_then(|cmd| cmd.meta_commands.get_mut(mc_name.as_str()))
             .and_then(|mc| mc.argument_list.pop())
             .is_some();
+        self.commit_snapshot_if_changed(pre, removed);
         if removed {
             self.dirty = true;
             self.validation_errors = xtce_core::validator::validate(&self.space_system);
@@ -2523,6 +2608,7 @@ impl App {
     }
 
     fn commit_enum_entry(&mut self, node_id: &NodeId, value: i64, label: String) {
+        self.push_undo_snapshot();
         use xtce_core::model::types::ValueEnumeration;
         use xtce_core::model::telemetry::ParameterType;
         use xtce_core::model::command::ArgumentType;
