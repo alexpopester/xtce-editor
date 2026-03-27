@@ -287,6 +287,7 @@ fn detail_integer_pt(t: &IntegerParameterType) -> Vec<Line<'static>> {
         if let Some(cal) = &enc.default_calibrator {
             lines.push(field("  Calibrator:", fmt_calibrator(cal)));
         }
+        lines.push(note("  K: edit calibrator"));
     }
     if let Some(vr) = &t.valid_range {
         lines.push(blank());
@@ -337,6 +338,7 @@ fn detail_float_pt(t: &FloatParameterType) -> Vec<Line<'static>> {
         if let Some(cal) = &enc.default_calibrator {
             lines.push(field("  Calibrator:", fmt_calibrator(cal)));
         }
+        lines.push(note("  K: edit calibrator"));
     }
     if let Some(vr) = &t.valid_range {
         lines.push(blank());

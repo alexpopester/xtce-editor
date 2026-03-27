@@ -162,6 +162,14 @@ pub enum Action {
     RestrictionEditChar(char),
     RestrictionEditBackspace,
     RestrictionEditCancel,
+    // Calibrator editor (Integer / Float types)
+    CalibratorStart,
+    CalibratorConfirm,
+    CalibratorMoveUp,
+    CalibratorMoveDown,
+    CalibratorChar(char),
+    CalibratorBackspace,
+    CalibratorCancel,
 }
 
 /// Map a raw crossterm [`KeyEvent`] to an [`Action`] in normal mode.
@@ -219,6 +227,7 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('P'), _) => Some(Action::ToggleReadOnly),
         (KeyCode::Char('R'), _) => Some(Action::RestrictionEditStart),
         (KeyCode::Char('L'), _) => Some(Action::EntryLocationStart),
+        (KeyCode::Char('K'), _) => Some(Action::CalibratorStart),
         // Overlays
         (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
         (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
@@ -366,6 +375,23 @@ pub fn restriction_edit_key_to_action(key: KeyEvent) -> Option<Action> {
             if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
         {
             Some(Action::RestrictionEditChar(c))
+        }
+        _ => None,
+    }
+}
+
+pub fn calibrator_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        (KeyCode::Esc, _) => Some(Action::CalibratorCancel),
+        (KeyCode::Enter, _) => Some(Action::CalibratorConfirm),
+        (KeyCode::Backspace, _) => Some(Action::CalibratorBackspace),
+        (KeyCode::Up, _) => Some(Action::CalibratorMoveUp),
+        (KeyCode::Down, _) => Some(Action::CalibratorMoveDown),
+        (KeyCode::Char(c), m)
+            if !m.contains(KeyModifiers::CONTROL) && !m.contains(KeyModifiers::ALT) =>
+        {
+            Some(Action::CalibratorChar(c))
         }
         _ => None,
     }

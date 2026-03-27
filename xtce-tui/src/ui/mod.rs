@@ -20,8 +20,9 @@ use ratatui::{
 use xtce_core::ValidationError;
 
 use crate::app::{
-    App, CreateStep, EntryAddStep, EntryLocationStep, Focus, RestrictionEditStep, TypeVariant,
-    RESTRICTION_OPERATOR_LABELS, integer_encoding_labels, float_size_labels,
+    App, CalibratorStep, CreateStep, EntryAddStep, EntryLocationStep, Focus, RestrictionEditStep,
+    TypeVariant, CALIBRATOR_KIND_LABELS, RESTRICTION_OPERATOR_LABELS, integer_encoding_labels,
+    float_size_labels,
 };
 use crate::event::EditField;
 
@@ -122,6 +123,21 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                 render_list_select("Select float size", float_size_labels(), *cursor, frame);
             }
             crate::app::EncodingStep::IntegerSizePrompt { .. } => {} // shown in status bar
+        }
+    }
+    if let Some(cs) = &app.calibrator_state {
+        match &cs.step {
+            CalibratorStep::KindSelect { cursor } => {
+                render_list_select("Calibrator kind", CALIBRATOR_KIND_LABELS, *cursor, frame);
+            }
+            CalibratorStep::PolynomialReview { coefficients } => {
+                render_polynomial_review(coefficients, frame);
+            }
+            CalibratorStep::SplineReview { points, order, .. } => {
+                render_spline_review(points, *order, frame);
+            }
+            // Buffer input steps are shown in the status bar.
+            _ => {}
         }
     }
 }
@@ -303,6 +319,45 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
             spans.push(Span::styled("  Enter:Confirm  Esc:Cancel", theme::dim()));
             frame.render_widget(Paragraph::new(Line::from(spans)), area);
             return;
+        }
+    }
+
+    if let Some(cs) = &app.calibrator_state {
+        match &cs.step {
+            CalibratorStep::PolynomialAddCoeff { buffer, coefficients } => {
+                spans.push(Span::styled(
+                    format!(" Coefficient a{} value: ", coefficients.len()),
+                    theme::section_header(),
+                ));
+                spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+                spans.push(Span::styled("_", theme::dim()));
+                spans.push(Span::styled("  Enter:Add  Esc:Back", theme::dim()));
+                frame.render_widget(Paragraph::new(Line::from(spans)), area);
+                return;
+            }
+            CalibratorStep::SplineAddRaw { buffer, points, .. } => {
+                spans.push(Span::styled(
+                    format!(" Point {} — raw value: ", points.len()),
+                    theme::section_header(),
+                ));
+                spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+                spans.push(Span::styled("_", theme::dim()));
+                spans.push(Span::styled("  Enter:Next  Esc:Back", theme::dim()));
+                frame.render_widget(Paragraph::new(Line::from(spans)), area);
+                return;
+            }
+            CalibratorStep::SplineAddCal { raw, buffer, points, .. } => {
+                spans.push(Span::styled(
+                    format!(" Point {} — calibrated value (raw={}): ", points.len(), raw),
+                    theme::section_header(),
+                ));
+                spans.push(Span::styled(buffer.clone(), theme::detail_value()));
+                spans.push(Span::styled("_", theme::dim()));
+                spans.push(Span::styled("  Enter:Add  Esc:Back", theme::dim()));
+                frame.render_widget(Paragraph::new(Line::from(spans)), area);
+                return;
+            }
+            _ => {}
         }
     }
 
@@ -627,6 +682,7 @@ fn render_help_overlay(frame: &mut Frame) {
         ("  P", "Toggle read-only flag (Parameter)"),
         ("  R", "Edit restriction criteria (Container with base)"),
         ("  L", "Set entry bit offset (Container)"),
+        ("  K", "Edit calibrator (Integer / Float type with encoding)"),
         ("  g", "Add argument to MetaCommand"),
         ("  G", "Remove last MetaCommand argument"),
     ];
@@ -650,6 +706,79 @@ fn render_help_overlay(frame: &mut Frame) {
         })
         .collect();
 
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_polynomial_review(coefficients: &[f64], frame: &mut Frame) {
+    let area = centered_rect(55, 65, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Polynomial Calibrator — a:Add coeff  d:Remove last  Enter:Commit  Esc:Cancel ")
+        .border_style(Style::default().fg(theme::BORDER_FOCUSED));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line<'static>> = if coefficients.is_empty() {
+        vec![Line::from(Span::styled(
+            "  (no coefficients — press 'a' to add)",
+            theme::dim(),
+        ))]
+    } else {
+        coefficients
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                Line::from(vec![
+                    Span::styled(format!("  a{} = ", i), theme::detail_label()),
+                    Span::styled(format!("{}", v), theme::detail_value()),
+                ])
+            })
+            .collect()
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter to commit, Esc to discard",
+        theme::dim(),
+    )));
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_spline_review(points: &[xtce_core::model::types::SplinePoint], order: u32, frame: &mut Frame) {
+    let area = centered_rect(55, 65, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Spline Calibrator (order {}) — a:Add point  d:Remove last  Enter:Commit  Esc:Cancel ", order))
+        .border_style(Style::default().fg(theme::BORDER_FOCUSED));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines: Vec<Line<'static>> = if points.is_empty() {
+        vec![Line::from(Span::styled(
+            "  (no points — press 'a' to add)",
+            theme::dim(),
+        ))]
+    } else {
+        let mut v = vec![Line::from(Span::styled(
+            format!("  {:<18}  {}", "Raw", "Calibrated"),
+            theme::detail_label(),
+        ))];
+        v.extend(points.iter().map(|p| {
+            Line::from(vec![
+                Span::styled(format!("  {:<18}  ", p.raw), theme::detail_value()),
+                Span::styled(format!("{}", p.calibrated), theme::detail_value()),
+            ])
+        }));
+        v
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Enter to commit, Esc to discard",
+        theme::dim(),
+    )));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

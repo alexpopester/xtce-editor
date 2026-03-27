@@ -247,6 +247,32 @@ pub struct RestrictionEditState {
     pub step: RestrictionEditStep,
 }
 
+// ── Calibrator editor state ──────────────────────────────────────────────────
+
+pub const CALIBRATOR_KIND_LABELS: &[&str] = &["None", "Polynomial", "Spline"];
+
+#[derive(Debug, Clone)]
+pub enum CalibratorStep {
+    /// Choose calibrator kind: None / Polynomial / Spline.
+    KindSelect { cursor: usize },
+    /// Review / edit polynomial coefficients (a₀, a₁, …).
+    PolynomialReview { coefficients: Vec<f64> },
+    /// Enter a new coefficient value.
+    PolynomialAddCoeff { buffer: String, coefficients: Vec<f64> },
+    /// Review / edit spline points.
+    SplineReview { points: Vec<xtce_core::model::types::SplinePoint>, order: u32, extrapolate: bool },
+    /// Enter the raw value for a new spline point.
+    SplineAddRaw { buffer: String, points: Vec<xtce_core::model::types::SplinePoint>, order: u32, extrapolate: bool },
+    /// Enter the calibrated value for a new spline point (raw is already captured).
+    SplineAddCal { raw: f64, buffer: String, points: Vec<xtce_core::model::types::SplinePoint>, order: u32, extrapolate: bool },
+}
+
+#[derive(Debug, Clone)]
+pub struct CalibratorState {
+    pub node_id: NodeId,
+    pub step: CalibratorStep,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Focus
 // ─────────────────────────────────────────────────────────────────────────────
@@ -321,6 +347,8 @@ pub struct App {
     pub restriction_edit_state: Option<RestrictionEditState>,
     /// Active entry location editor, or `None`.
     pub entry_location_state: Option<EntryLocationState>,
+    /// Active calibrator editor, or `None`.
+    pub calibrator_state: Option<CalibratorState>,
     /// Undo history: snapshots of `space_system` taken before each mutation.
     /// Most recent snapshot is at the back. Capped at 50 entries.
     pub undo_stack: VecDeque<SpaceSystem>,
@@ -369,6 +397,7 @@ impl App {
             enum_entry_state: None,
             restriction_edit_state: None,
             entry_location_state: None,
+            calibrator_state: None,
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
         }
@@ -439,6 +468,20 @@ impl App {
                 Action::RestrictionEditMoveDown  => self.restriction_edit_move(1),
                 Action::RestrictionEditChar(c)   => self.restriction_edit_push_char(c),
                 Action::RestrictionEditBackspace => self.restriction_edit_pop_char(),
+                _ => {}
+            }
+            return;
+        }
+
+        // Calibrator editor intercepts all input.
+        if self.calibrator_state.is_some() {
+            match action {
+                Action::CalibratorCancel    => self.calibrator_cancel(),
+                Action::CalibratorConfirm   => self.calibrator_confirm_step(),
+                Action::CalibratorMoveUp    => self.calibrator_move(-1),
+                Action::CalibratorMoveDown  => self.calibrator_move(1),
+                Action::CalibratorChar(c)   => self.calibrator_push_char(c),
+                Action::CalibratorBackspace => self.calibrator_pop_char(),
                 _ => {}
             }
             return;
@@ -602,6 +645,7 @@ impl App {
             Action::ToggleReadOnly     => self.toggle_read_only(),
             Action::RestrictionEditStart  => self.start_restriction_edit(),
             Action::EntryLocationStart    => self.start_entry_location(),
+            Action::CalibratorStart       => self.start_calibrator_edit(),
             Action::CreateStart  => self.start_create(),
             Action::DeleteStart  => self.start_delete(),
             Action::EntryAddStart   => self.start_entry_add(),
@@ -626,6 +670,8 @@ impl App {
             Action::EntryLocationMoveUp | Action::EntryLocationMoveDown
             | Action::EntryLocationConfirm | Action::EntryLocationChar(_)
             | Action::EntryLocationBackspace | Action::EntryLocationCancel => {}
+            Action::CalibratorConfirm | Action::CalibratorMoveUp | Action::CalibratorMoveDown
+            | Action::CalibratorChar(_) | Action::CalibratorBackspace | Action::CalibratorCancel => {}
         }
     }
 
@@ -2791,6 +2837,266 @@ impl App {
         }
         self.dirty = true;
         self.validation_errors = xtce_core::validator::validate(&self.space_system);
+    }
+
+    // ── Calibrator editor ─────────────────────────────────────────────────────
+
+    fn start_calibrator_edit(&mut self) {
+        use xtce_core::model::types::Calibrator;
+        use xtce_core::model::telemetry::ParameterType;
+        use xtce_core::model::command::ArgumentType;
+        if self.focus != Focus::Tree { return; }
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        let node_id = node.node_id.clone();
+
+        // Returns the existing calibrator (cloned) if the node is an Integer or Float
+        // ParameterType/ArgumentType with an existing encoding; otherwise None.
+        let existing: Option<Option<Calibrator>> = match &node_id {
+            NodeId::TmParameterType(path, name) => {
+                get_ss(&self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_ref())
+                    .and_then(|tm| tm.parameter_types.get(name.as_str()))
+                    .and_then(|pt| match pt {
+                        ParameterType::Integer(t) => t.encoding.as_ref().map(|e| e.default_calibrator.clone()),
+                        ParameterType::Float(t)   => t.encoding.as_ref().map(|e| e.default_calibrator.clone()),
+                        _ => None,
+                    })
+            }
+            NodeId::CmdArgumentType(path, name) => {
+                get_ss(&self.space_system, path)
+                    .and_then(|ss| ss.command.as_ref())
+                    .and_then(|cmd| cmd.argument_types.get(name.as_str()))
+                    .and_then(|at| match at {
+                        ArgumentType::Integer(t) => t.encoding.as_ref().map(|e| e.default_calibrator.clone()),
+                        ArgumentType::Float(t)   => t.encoding.as_ref().map(|e| e.default_calibrator.clone()),
+                        _ => None,
+                    })
+            }
+            _ => return,
+        };
+
+        let Some(existing_cal) = existing else { return };
+        let cursor = match &existing_cal {
+            None => 0,
+            Some(Calibrator::Polynomial(_))      => 1,
+            Some(Calibrator::SplineCalibrator(_)) => 2,
+        };
+
+        self.calibrator_state = Some(CalibratorState {
+            node_id,
+            step: CalibratorStep::KindSelect { cursor },
+        });
+    }
+
+    fn calibrator_cancel(&mut self) {
+        let Some(cs) = self.calibrator_state.take() else { return };
+        match cs.step {
+            CalibratorStep::KindSelect { .. }
+            | CalibratorStep::PolynomialReview { .. }
+            | CalibratorStep::SplineReview { .. } => {
+                // Discard all in-progress changes.
+            }
+            CalibratorStep::PolynomialAddCoeff { coefficients, .. } => {
+                self.calibrator_state = Some(CalibratorState {
+                    node_id: cs.node_id,
+                    step: CalibratorStep::PolynomialReview { coefficients },
+                });
+            }
+            CalibratorStep::SplineAddRaw { points, order, extrapolate, .. } => {
+                self.calibrator_state = Some(CalibratorState {
+                    node_id: cs.node_id,
+                    step: CalibratorStep::SplineReview { points, order, extrapolate },
+                });
+            }
+            CalibratorStep::SplineAddCal { points, order, extrapolate, .. } => {
+                self.calibrator_state = Some(CalibratorState {
+                    node_id: cs.node_id,
+                    step: CalibratorStep::SplineReview { points, order, extrapolate },
+                });
+            }
+        }
+    }
+
+    fn calibrator_move(&mut self, delta: i64) {
+        let Some(cs) = self.calibrator_state.as_mut() else { return };
+        if let CalibratorStep::KindSelect { cursor } = &mut cs.step {
+            let max = CALIBRATOR_KIND_LABELS.len() - 1;
+            *cursor = (*cursor as i64 + delta).clamp(0, max as i64) as usize;
+        }
+    }
+
+    fn calibrator_push_char(&mut self, c: char) {
+        let Some(cs) = self.calibrator_state.as_mut() else { return };
+        match &mut cs.step {
+            CalibratorStep::KindSelect { cursor } => {
+                let max = CALIBRATOR_KIND_LABELS.len() - 1;
+                if c == 'j' { *cursor = (*cursor + 1).min(max); }
+                else if c == 'k' { *cursor = cursor.saturating_sub(1); }
+            }
+            CalibratorStep::PolynomialReview { coefficients } => {
+                if c == 'a' {
+                    let coeff = coefficients.clone();
+                    cs.step = CalibratorStep::PolynomialAddCoeff { buffer: String::new(), coefficients: coeff };
+                } else if c == 'd' {
+                    coefficients.pop();
+                }
+            }
+            CalibratorStep::SplineReview { points, order, extrapolate } => {
+                if c == 'a' {
+                    let (pts, ord, ext) = (points.clone(), *order, *extrapolate);
+                    cs.step = CalibratorStep::SplineAddRaw { buffer: String::new(), points: pts, order: ord, extrapolate: ext };
+                } else if c == 'd' {
+                    points.pop();
+                }
+            }
+            CalibratorStep::PolynomialAddCoeff { buffer, .. }
+            | CalibratorStep::SplineAddRaw { buffer, .. }
+            | CalibratorStep::SplineAddCal { buffer, .. } => {
+                // Accept float characters: digits, dot, minus sign, e/E for exponent.
+                if c.is_ascii_digit() || c == '.' || (c == '-' && buffer.is_empty()) || ((c == 'e' || c == 'E') && !buffer.is_empty()) {
+                    buffer.push(c);
+                }
+            }
+        }
+    }
+
+    fn calibrator_pop_char(&mut self) {
+        let Some(cs) = self.calibrator_state.as_mut() else { return };
+        match &mut cs.step {
+            CalibratorStep::PolynomialAddCoeff { buffer, .. }
+            | CalibratorStep::SplineAddRaw { buffer, .. }
+            | CalibratorStep::SplineAddCal { buffer, .. } => { buffer.pop(); }
+            _ => {}
+        }
+    }
+
+    fn calibrator_confirm_step(&mut self) {
+        use xtce_core::model::types::{Calibrator, PolynomialCalibrator, SplineCalibrator, SplinePoint};
+        let Some(cs) = self.calibrator_state.take() else { return };
+        let node_id = cs.node_id;
+        match cs.step {
+            CalibratorStep::KindSelect { cursor } => match cursor {
+                0 => {
+                    // None — clear calibrator.
+                    self.commit_calibrator(&node_id, None);
+                }
+                1 => {
+                    self.calibrator_state = Some(CalibratorState {
+                        node_id,
+                        step: CalibratorStep::PolynomialReview { coefficients: vec![] },
+                    });
+                }
+                _ => {
+                    self.calibrator_state = Some(CalibratorState {
+                        node_id,
+                        step: CalibratorStep::SplineReview { points: vec![], order: 1, extrapolate: false },
+                    });
+                }
+            }
+            CalibratorStep::PolynomialReview { coefficients } => {
+                let cal = Calibrator::Polynomial(PolynomialCalibrator { coefficients });
+                self.commit_calibrator(&node_id, Some(cal));
+            }
+            CalibratorStep::PolynomialAddCoeff { buffer, mut coefficients } => {
+                match buffer.trim().parse::<f64>() {
+                    Ok(v) => {
+                        coefficients.push(v);
+                        self.calibrator_state = Some(CalibratorState {
+                            node_id,
+                            step: CalibratorStep::PolynomialReview { coefficients },
+                        });
+                    }
+                    Err(_) => {
+                        self.calibrator_state = Some(CalibratorState {
+                            node_id,
+                            step: CalibratorStep::PolynomialAddCoeff { buffer, coefficients },
+                        });
+                    }
+                }
+            }
+            CalibratorStep::SplineReview { points, order, extrapolate } => {
+                let cal = Calibrator::SplineCalibrator(SplineCalibrator { order, extrapolate, points });
+                self.commit_calibrator(&node_id, Some(cal));
+            }
+            CalibratorStep::SplineAddRaw { buffer, points, order, extrapolate } => {
+                match buffer.trim().parse::<f64>() {
+                    Ok(raw) => {
+                        self.calibrator_state = Some(CalibratorState {
+                            node_id,
+                            step: CalibratorStep::SplineAddCal { raw, buffer: String::new(), points, order, extrapolate },
+                        });
+                    }
+                    Err(_) => {
+                        self.calibrator_state = Some(CalibratorState {
+                            node_id,
+                            step: CalibratorStep::SplineAddRaw { buffer, points, order, extrapolate },
+                        });
+                    }
+                }
+            }
+            CalibratorStep::SplineAddCal { raw, buffer, mut points, order, extrapolate } => {
+                match buffer.trim().parse::<f64>() {
+                    Ok(calibrated) => {
+                        points.push(SplinePoint { raw, calibrated });
+                        self.calibrator_state = Some(CalibratorState {
+                            node_id,
+                            step: CalibratorStep::SplineReview { points, order, extrapolate },
+                        });
+                    }
+                    Err(_) => {
+                        self.calibrator_state = Some(CalibratorState {
+                            node_id,
+                            step: CalibratorStep::SplineAddCal { raw, buffer, points, order, extrapolate },
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn commit_calibrator(&mut self, node_id: &NodeId, cal: Option<xtce_core::model::types::Calibrator>) {
+        use xtce_core::model::telemetry::ParameterType;
+        use xtce_core::model::command::ArgumentType;
+        self.push_undo_snapshot();
+        let changed = match node_id {
+            NodeId::TmParameterType(path, name) => {
+                if let Some(pt) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.telemetry.as_mut())
+                    .and_then(|tm| tm.parameter_types.get_mut(name.as_str()))
+                {
+                    match pt {
+                        ParameterType::Integer(t) => {
+                            if let Some(enc) = t.encoding.as_mut() { enc.default_calibrator = cal; true } else { false }
+                        }
+                        ParameterType::Float(t) => {
+                            if let Some(enc) = t.encoding.as_mut() { enc.default_calibrator = cal; true } else { false }
+                        }
+                        _ => false,
+                    }
+                } else { false }
+            }
+            NodeId::CmdArgumentType(path, name) => {
+                if let Some(at) = get_ss_mut(&mut self.space_system, path)
+                    .and_then(|ss| ss.command.as_mut())
+                    .and_then(|cmd| cmd.argument_types.get_mut(name.as_str()))
+                {
+                    match at {
+                        ArgumentType::Integer(t) => {
+                            if let Some(enc) = t.encoding.as_mut() { enc.default_calibrator = cal; true } else { false }
+                        }
+                        ArgumentType::Float(t) => {
+                            if let Some(enc) = t.encoding.as_mut() { enc.default_calibrator = cal; true } else { false }
+                        }
+                        _ => false,
+                    }
+                } else { false }
+            }
+            _ => false,
+        };
+        if changed {
+            self.dirty = true;
+            self.validation_errors = xtce_core::validator::validate(&self.space_system);
+        }
     }
 }
 
