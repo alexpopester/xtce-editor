@@ -1,5 +1,30 @@
 use thiserror::Error;
 
+/// Structured location of a validation error within the SpaceSystem tree.
+///
+/// The TUI converts this into a [`NodeId`](xtce-tui) to allow jumping directly
+/// to the offending item.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorLocation {
+    /// Path from the root SpaceSystem down to the SpaceSystem that owns the item.
+    /// Empty means the root SpaceSystem.
+    pub ss_path: Vec<String>,
+    /// What kind of item the error points at.
+    pub item_kind: ErrorItemKind,
+    /// Name of the item within its SpaceSystem.
+    pub item_name: String,
+}
+
+/// The kind of item an [`ErrorLocation`] points at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorItemKind {
+    ParameterType,
+    Parameter,
+    Container,
+    ArgumentType,
+    MetaCommand,
+}
+
 #[derive(Debug, Error)]
 pub enum ParseError {
     #[error("XML error: {0}")]
@@ -27,13 +52,27 @@ pub enum ParseError {
 #[derive(Debug, Error)]
 pub enum ValidationError {
     #[error("unresolved reference '{name}' in {context}")]
-    UnresolvedReference { name: String, context: String },
+    UnresolvedReference {
+        name: String,
+        context: String,
+        /// Where in the tree the broken reference lives (for TUI jump-to-error).
+        location: Option<ErrorLocation>,
+    },
 
     #[error("duplicate name '{name}' in SpaceSystem '{space_system}'")]
     DuplicateName { name: String, space_system: String },
 
     #[error("cyclic inheritance involving '{name}'")]
-    CyclicInheritance { name: String },
+    CyclicInheritance {
+        name: String,
+        location: Option<ErrorLocation>,
+    },
+
+    #[error("'{name}' lists itself as its own base container")]
+    SelfReferentialInheritance {
+        name: String,
+        location: Option<ErrorLocation>,
+    },
 
     #[error("missing required field '{field}' on {element} '{name}'")]
     MissingRequiredField { field: &'static str, element: &'static str, name: String },

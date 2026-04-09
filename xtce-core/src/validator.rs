@@ -27,7 +27,7 @@ use crate::model::container::{
     SequenceEntry,
 };
 use crate::model::telemetry::{ParameterType, TelemetryMetaData};
-use crate::{SpaceSystem, ValidationError};
+use crate::{ErrorItemKind, ErrorLocation, SpaceSystem, ValidationError};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public entry point
@@ -40,8 +40,34 @@ use crate::{SpaceSystem, ValidationError};
 /// are reported together.
 pub fn validate(space_system: &SpaceSystem) -> Vec<ValidationError> {
     let mut errors = Vec::new();
-    validate_space_system(space_system, &Scope::default(), &mut errors);
+    // Pre-collect every container name from the entire tree so that
+    // base-container references across SpaceSystem boundaries (child → parent or
+    // sibling) don't produce false-positive unresolved errors.  Parameters and
+    // types still use the strict ancestor-only scope.
+    let mut all_containers: HashSet<String> = HashSet::new();
+    collect_all_containers(space_system, &mut all_containers);
+    validate_space_system(space_system, &Scope::default(), &all_containers, &[], &mut errors);
     errors
+}
+
+/// Recursively collect every SequenceContainer and CommandContainer name in the
+/// SpaceSystem tree into `out`.
+fn collect_all_containers(ss: &SpaceSystem, out: &mut HashSet<String>) {
+    if let Some(tm) = &ss.telemetry {
+        out.extend(tm.containers.keys().cloned());
+    }
+    if let Some(cmd) = &ss.command {
+        out.extend(cmd.command_containers.keys().cloned());
+        // Inline CommandContainers inside MetaCommands.
+        for mc in cmd.meta_commands.values() {
+            if let Some(cc) = &mc.command_container {
+                out.insert(cc.name.clone());
+            }
+        }
+    }
+    for child in &ss.sub_systems {
+        collect_all_containers(child, out);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -87,12 +113,14 @@ impl<'a> Scope<'a> {
 fn validate_space_system(
     ss: &SpaceSystem,
     parent_scope: &Scope<'_>,
+    all_containers: &HashSet<String>,
+    ss_path: &[String],
     errors: &mut Vec<ValidationError>,
 ) {
     let scope = Scope::with_space_system(parent_scope, ss);
 
     if let Some(tm) = &ss.telemetry {
-        validate_telemetry(tm, &ss.name, &scope, errors);
+        validate_telemetry(tm, &ss.name, &scope, all_containers, ss_path, errors);
         detect_container_cycles(&ss.name, &tm.containers, errors);
     }
 
@@ -101,7 +129,7 @@ fn validate_space_system(
             validate_argument_type(at, name, &ss.name, &scope, errors);
         }
         for mc in cmd.meta_commands.values() {
-            validate_meta_command(mc, &ss.name, &scope, errors);
+            validate_meta_command(mc, &ss.name, &scope, all_containers, ss_path, errors);
         }
         detect_meta_command_cycles(&ss.name, &cmd.meta_commands, errors);
     }
@@ -109,8 +137,10 @@ fn validate_space_system(
     check_duplicate_sub_system_names(ss, errors);
     check_duplicate_names(ss, parent_scope, errors);
 
+    let mut child_path = ss_path.to_vec();
+    child_path.push(ss.name.clone());
     for child in &ss.sub_systems {
-        validate_space_system(child, &scope, errors);
+        validate_space_system(child, &scope, all_containers, &child_path, errors);
     }
 }
 
@@ -228,6 +258,8 @@ fn validate_telemetry(
     tm: &TelemetryMetaData,
     ss_name: &str,
     scope: &Scope<'_>,
+    all_containers: &HashSet<String>,
+    ss_path: &[String],
     errors: &mut Vec<ValidationError>,
 ) {
     for (name, pt) in &tm.parameter_types {
@@ -238,11 +270,16 @@ fn validate_telemetry(
             errors.push(ValidationError::UnresolvedReference {
                 name: param.parameter_type_ref.clone(),
                 context: format!("parameter '{}' in SpaceSystem '{}'", name, ss_name),
+                location: Some(ErrorLocation {
+                    ss_path: ss_path.to_vec(),
+                    item_kind: ErrorItemKind::Parameter,
+                    item_name: name.clone(),
+                }),
             });
         }
     }
     for (name, container) in &tm.containers {
-        validate_sequence_container(container, name, ss_name, scope, errors);
+        validate_sequence_container(container, name, ss_name, scope, all_containers, ss_path, errors);
     }
 }
 
@@ -262,6 +299,7 @@ fn validate_parameter_type(
                     "baseType of ParameterType '{}' in SpaceSystem '{}'",
                     name, ss_name
                 ),
+                location: None,
             });
         }
     }
@@ -277,6 +315,7 @@ fn validate_parameter_type(
                             "member '{}' of AggregateParameterType '{}' in SpaceSystem '{}'",
                             member.name, name, ss_name
                         ),
+                        location: None,
                     });
                 }
             }
@@ -289,6 +328,7 @@ fn validate_parameter_type(
                         "arrayTypeRef of ArrayParameterType '{}' in SpaceSystem '{}'",
                         name, ss_name
                     ),
+                    location: None,
                 });
             }
         }
@@ -301,17 +341,35 @@ fn validate_sequence_container(
     name: &str,
     ss_name: &str,
     scope: &Scope<'_>,
+    all_containers: &HashSet<String>,
+    ss_path: &[String],
     errors: &mut Vec<ValidationError>,
 ) {
+    let container_loc = || ErrorLocation {
+        ss_path: ss_path.to_vec(),
+        item_kind: ErrorItemKind::Container,
+        item_name: name.to_string(),
+    };
+
     // Check base container reference.
     if let Some(base) = &container.base_container {
-        if !scope.containers.contains(base.container_ref.as_str()) {
+        let cref = base.container_ref.as_str();
+        if cref == name {
+            errors.push(ValidationError::SelfReferentialInheritance {
+                name: name.to_string(),
+                location: Some(container_loc()),
+            });
+        } else if !is_qualified_ref(cref)
+            && !scope.containers.contains(cref)
+            && !all_containers.contains(cref)
+        {
             errors.push(ValidationError::UnresolvedReference {
                 name: base.container_ref.clone(),
                 context: format!(
                     "BaseContainer of SequenceContainer '{}' in SpaceSystem '{}'",
                     name, ss_name
                 ),
+                location: Some(container_loc()),
             });
         }
         // Check restriction criteria parameter references.
@@ -324,13 +382,16 @@ fn validate_sequence_container(
     for entry in &container.entry_list {
         match entry {
             SequenceEntry::ParameterRef(e) => {
-                if !scope.parameters.contains(e.parameter_ref.as_str()) {
+                if !is_qualified_ref(&e.parameter_ref)
+                    && !scope.parameters.contains(e.parameter_ref.as_str())
+                {
                     errors.push(ValidationError::UnresolvedReference {
                         name: e.parameter_ref.clone(),
                         context: format!(
                             "ParameterRefEntry in container '{}' in SpaceSystem '{}'",
                             name, ss_name
                         ),
+                        location: Some(container_loc()),
                     });
                 }
                 if let Some(mc) = &e.include_condition {
@@ -338,13 +399,17 @@ fn validate_sequence_container(
                 }
             }
             SequenceEntry::ContainerRef(e) => {
-                if !scope.containers.contains(e.container_ref.as_str()) {
+                if !is_qualified_ref(&e.container_ref)
+                    && !scope.containers.contains(e.container_ref.as_str())
+                    && !all_containers.contains(e.container_ref.as_str())
+                {
                     errors.push(ValidationError::UnresolvedReference {
                         name: e.container_ref.clone(),
                         context: format!(
                             "ContainerRefEntry in container '{}' in SpaceSystem '{}'",
                             name, ss_name
                         ),
+                        location: Some(container_loc()),
                     });
                 }
                 if let Some(mc) = &e.include_condition {
@@ -352,19 +417,30 @@ fn validate_sequence_container(
                 }
             }
             SequenceEntry::ArrayParameterRef(e) => {
-                if !scope.parameters.contains(e.parameter_ref.as_str()) {
+                if !is_qualified_ref(&e.parameter_ref)
+                    && !scope.parameters.contains(e.parameter_ref.as_str())
+                {
                     errors.push(ValidationError::UnresolvedReference {
                         name: e.parameter_ref.clone(),
                         context: format!(
                             "ArrayParameterRefEntry in container '{}' in SpaceSystem '{}'",
                             name, ss_name
                         ),
+                        location: Some(container_loc()),
                     });
                 }
             }
             SequenceEntry::FixedValue(_) => {}
         }
     }
+}
+
+/// Returns true if a reference string is a qualified XTCE path (contains `/`).
+/// Qualified paths require path-based resolution that the current flat-scope
+/// validator does not yet support, so they are accepted without checking.
+#[inline]
+fn is_qualified_ref(s: &str) -> bool {
+    s.contains('/')
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -386,6 +462,7 @@ fn validate_argument_type(
                     "baseType of ArgumentType '{}' in SpaceSystem '{}'",
                     name, ss_name
                 ),
+                location: None,
             });
         }
     }
@@ -400,6 +477,7 @@ fn validate_argument_type(
                             "member '{}' of AggregateArgumentType '{}' in SpaceSystem '{}'",
                             member.name, name, ss_name
                         ),
+                        location: None,
                     });
                 }
             }
@@ -412,6 +490,7 @@ fn validate_argument_type(
                         "arrayTypeRef of ArrayArgumentType '{}' in SpaceSystem '{}'",
                         name, ss_name
                     ),
+                    location: None,
                 });
             }
         }
@@ -423,30 +502,42 @@ fn validate_meta_command(
     mc: &MetaCommand,
     ss_name: &str,
     scope: &Scope<'_>,
+    all_containers: &HashSet<String>,
+    ss_path: &[String],
     errors: &mut Vec<ValidationError>,
 ) {
+    let mc_loc = || ErrorLocation {
+        ss_path: ss_path.to_vec(),
+        item_kind: ErrorItemKind::MetaCommand,
+        item_name: mc.name.clone(),
+    };
+
     // Check base MetaCommand reference.
     if let Some(base) = &mc.base_meta_command {
-        if !scope.meta_commands.contains(base.as_str()) {
+        if !is_qualified_ref(base) && !scope.meta_commands.contains(base.as_str()) {
             errors.push(ValidationError::UnresolvedReference {
                 name: base.clone(),
                 context: format!(
                     "baseMetaCommand of MetaCommand '{}' in SpaceSystem '{}'",
                     mc.name, ss_name
                 ),
+                location: Some(mc_loc()),
             });
         }
     }
 
     // Check argument type references.
     for arg in &mc.argument_list {
-        if !scope.argument_types.contains(arg.argument_type_ref.as_str()) {
+        if !is_qualified_ref(&arg.argument_type_ref)
+            && !scope.argument_types.contains(arg.argument_type_ref.as_str())
+        {
             errors.push(ValidationError::UnresolvedReference {
                 name: arg.argument_type_ref.clone(),
                 context: format!(
                     "argumentTypeRef of argument '{}' in MetaCommand '{}' in SpaceSystem '{}'",
                     arg.name, mc.name, ss_name
                 ),
+                location: Some(mc_loc()),
             });
         }
     }
@@ -454,7 +545,11 @@ fn validate_meta_command(
     // Check CommandContainer base container and entry refs.
     if let Some(cc) = &mc.command_container {
         if let Some(base) = &cc.base_container {
-            if !scope.containers.contains(base.container_ref.as_str()) {
+            let cref = base.container_ref.as_str();
+            if !is_qualified_ref(cref)
+                && !scope.containers.contains(cref)
+                && !all_containers.contains(cref)
+            {
                 errors.push(ValidationError::UnresolvedReference {
                     name: base.container_ref.clone(),
                     context: format!(
@@ -462,6 +557,7 @@ fn validate_meta_command(
                          SpaceSystem '{}'",
                         cc.name, mc.name, ss_name
                     ),
+                    location: Some(mc_loc()),
                 });
             }
         }
@@ -500,6 +596,7 @@ fn check_restriction_criteria(
                          SpaceSystem '{}'",
                         container_name, ss_name
                     ),
+                    location: None,
                 });
             }
         }
@@ -542,6 +639,7 @@ fn check_comparison(
                 "Comparison in container '{}' in SpaceSystem '{}'",
                 container_name, ss_name
             ),
+            location: None,
         });
     }
 }
@@ -656,6 +754,7 @@ fn detect_cycles_in_map(
                 if !reported.contains(current) {
                     errors.push(ValidationError::CyclicInheritance {
                         name: current.to_owned(),
+                        location: None,
                     });
                     reported.insert(current);
                 }

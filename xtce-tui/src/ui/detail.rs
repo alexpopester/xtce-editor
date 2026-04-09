@@ -23,7 +23,7 @@ use xtce_core::model::{
     types::{
         BinaryDataEncoding, BinarySize, ByteOrder, Calibrator, FloatDataEncoding, FloatEncoding,
         FloatSizeInBits, IntegerDataEncoding, IntegerEncoding, StringDataEncoding, StringEncoding,
-        StringSize, Unit,
+        StringSize, Unit, ValueEnumeration,
     },
 };
 
@@ -104,10 +104,14 @@ pub fn detail_lines(app: &App) -> Vec<Line<'static>> {
             pt.map(detail_parameter_type).unwrap_or_default()
         }
         NodeId::TmParameter(path, name) => {
-            let param = get_ss(root, path)
+            let ss = get_ss(root, path);
+            let param = ss
                 .and_then(|s| s.telemetry.as_ref())
                 .and_then(|tm| tm.parameters.get(name));
-            param.map(detail_parameter).unwrap_or_default()
+            match (ss, param) {
+                (Some(ss), Some(p)) => detail_parameter(p, ss, root),
+                _ => vec![],
+            }
         }
         NodeId::TmContainer(path, name) => {
             let ss = get_ss(root, path);
@@ -500,10 +504,19 @@ fn detail_array_pt(t: &ArrayParameterType) -> Vec<Line<'static>> {
 // Parameter
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn detail_parameter(p: &Parameter) -> Vec<Line<'static>> {
+fn detail_parameter(p: &Parameter, local_ss: &SpaceSystem, root: &SpaceSystem) -> Vec<Line<'static>> {
     let mut lines = vec![heading(format!("Parameter: {}", p.name)), sep()];
     lines.push(field("Type ref:", p.parameter_type_ref.clone()));
+
+    // Inline the resolved type so the user doesn't have to navigate to it.
+    if let Some(pt) = resolve_parameter_type(&p.parameter_type_ref, local_ss, root) {
+        lines.push(blank());
+        lines.push(subheading("Resolved type"));
+        lines.extend(detail_parameter_type_inline(pt));
+    }
+
     if let Some(d) = &p.short_description {
+        lines.push(blank());
         lines.push(field("Description:", d.clone()));
     }
     if let Some(d) = &p.long_description {
@@ -536,6 +549,146 @@ fn detail_parameter(p: &Parameter) -> Vec<Line<'static>> {
     lines
 }
 
+/// Walk from `local_ss` up to `root` looking for a ParameterType named `type_ref`.
+/// Mirrors XTCE scoping: current SpaceSystem is checked first, then ancestors.
+fn resolve_parameter_type<'a>(
+    type_ref: &str,
+    local_ss: &'a SpaceSystem,
+    root: &'a SpaceSystem,
+) -> Option<&'a ParameterType> {
+    // Try the local SS first.
+    if let Some(pt) = local_ss.telemetry.as_ref().and_then(|tm| tm.parameter_types.get(type_ref)) {
+        return Some(pt);
+    }
+    // Walk ancestors by finding all SpaceSystems that contain `local_ss` as a descendant.
+    find_ancestor_type(type_ref, root, &local_ss.name)
+}
+
+fn find_ancestor_type<'a>(
+    type_ref: &str,
+    ss: &'a SpaceSystem,
+    target_name: &str,
+) -> Option<&'a ParameterType> {
+    // Check if this node IS the target — stop ascending.
+    if ss.name == target_name {
+        return None;
+    }
+    // Check if any child is the target (or contains it); if so, this node is an ancestor.
+    let has_descendant = ss.sub_systems.iter().any(|c| subtree_contains(c, target_name));
+    if !has_descendant {
+        return None;
+    }
+    // Check this SS's own types first.
+    if let Some(pt) = ss.telemetry.as_ref().and_then(|tm| tm.parameter_types.get(type_ref)) {
+        return Some(pt);
+    }
+    // Recurse into children to continue the ancestor walk.
+    for child in &ss.sub_systems {
+        if let Some(pt) = find_ancestor_type(type_ref, child, target_name) {
+            return Some(pt);
+        }
+    }
+    None
+}
+
+fn subtree_contains(ss: &SpaceSystem, name: &str) -> bool {
+    ss.name == name || ss.sub_systems.iter().any(|c| subtree_contains(c, name))
+}
+
+/// Compact inline summary of a ParameterType for display inside a Parameter detail block.
+fn detail_parameter_type_inline(pt: &ParameterType) -> Vec<Line<'static>> {
+    match pt {
+        ParameterType::Integer(t) => {
+            let mut lines = vec![field("  Kind:", "Integer".to_string())];
+            if let Some(enc) = &t.encoding {
+                lines.push(field("  Encoding:", format!("{:?} {}b", enc.encoding, enc.size_in_bits)));
+                if let Some(cal) = &enc.default_calibrator {
+                    lines.push(field("  Calibrator:", fmt_calibrator_kind(cal)));
+                }
+            }
+            if !t.unit_set.is_empty() {
+                lines.push(field("  Units:", t.unit_set.iter().map(fmt_unit).collect::<Vec<_>>().join(", ")));
+            }
+            if let Some(r) = &t.valid_range {
+                let lo = r.min_inclusive.map(|v| v.to_string()).unwrap_or_else(|| "-∞".to_string());
+                let hi = r.max_inclusive.map(|v| v.to_string()).unwrap_or_else(|| "+∞".to_string());
+                lines.push(field("  Range:", format!("[{lo}, {hi}]")));
+            }
+            lines
+        }
+        ParameterType::Float(t) => {
+            let mut lines = vec![field("  Kind:", "Float".to_string())];
+            if let Some(enc) = &t.encoding {
+                let bits = match enc.size_in_bits {
+                    FloatSizeInBits::F32 => 32,
+                    FloatSizeInBits::F64 => 64,
+                    FloatSizeInBits::F128 => 128,
+                };
+                lines.push(field("  Encoding:", format!("{:?} {bits}b", enc.encoding)));
+                if let Some(cal) = &enc.default_calibrator {
+                    lines.push(field("  Calibrator:", fmt_calibrator_kind(cal)));
+                }
+            }
+            if !t.unit_set.is_empty() {
+                lines.push(field("  Units:", t.unit_set.iter().map(fmt_unit).collect::<Vec<_>>().join(", ")));
+            }
+            lines
+        }
+        ParameterType::Enumerated(t) => {
+            let mut lines = vec![field("  Kind:", "Enumerated".to_string())];
+            if let Some(enc) = &t.encoding {
+                lines.push(field("  Encoding:", format!("{:?} {}b", enc.encoding, enc.size_in_bits)));
+            }
+            lines.push(field("  Enumerations:", t.enumeration_list.len().to_string()));
+            for e in t.enumeration_list.iter().take(6) {
+                lines.push(Line::from(format!("    {} \u{2192} {}", e.value, e.label)));
+            }
+            if t.enumeration_list.len() > 6 {
+                lines.push(Line::from(format!("    \u{2026} ({} total)", t.enumeration_list.len())));
+            }
+            lines
+        }
+        ParameterType::Boolean(t) => {
+            let mut lines = vec![field("  Kind:", "Boolean".to_string())];
+            if let Some(enc) = &t.encoding {
+                lines.push(field("  Encoding:", format!("{:?} {}b", enc.encoding, enc.size_in_bits)));
+            }
+            let true_label = t.one_string_value.clone().unwrap_or_else(|| "true".to_string());
+            let false_label = t.zero_string_value.clone().unwrap_or_else(|| "false".to_string());
+            lines.push(field("  True label:", true_label));
+            lines.push(field("  False label:", false_label));
+            lines
+        }
+        ParameterType::String(_) => vec![field("  Kind:", "String".to_string())],
+        ParameterType::Binary(_) => vec![field("  Kind:", "Binary".to_string())],
+        ParameterType::Aggregate(t) => {
+            let mut lines = vec![
+                field("  Kind:", "Aggregate".to_string()),
+                field("  Members:", t.member_list.len().to_string()),
+            ];
+            for m in &t.member_list {
+                lines.push(Line::from(format!("    {} : {}", m.name, m.type_ref)));
+            }
+            lines
+        }
+        ParameterType::Array(t) => vec![
+            field("  Kind:", "Array".to_string()),
+            field("  Element type:", t.array_type_ref.clone()),
+        ],
+    }
+}
+
+fn fmt_calibrator_kind(cal: &Calibrator) -> String {
+    match cal {
+        Calibrator::Polynomial(p) => format!("Polynomial ({} coeffs)", p.coefficients.len()),
+        Calibrator::SplineCalibrator(s) => format!("Spline ({} points)", s.points.len()),
+    }
+}
+
+fn fmt_unit(u: &Unit) -> String {
+    u.value.clone()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SequenceContainer
 // ─────────────────────────────────────────────────────────────────────────────
@@ -558,13 +711,16 @@ fn detail_sequence_container(
     }
 
     if let Some(bc) = &c.base_container {
-        lines.push(blank());
-        lines.push(subheading("Inheritance"));
-        lines.push(field("  Extends:", bc.container_ref.clone()));
-        if let Some(rc) = &bc.restriction_criteria {
-            lines.push(field("  Restriction:", fmt_restriction(rc)));
+        // Skip self-referential base containers — they're a user error, not inheritance.
+        if bc.container_ref != c.name {
+            lines.push(blank());
+            lines.push(subheading("Inheritance"));
+            lines.push(field("  Extends:", bc.container_ref.clone()));
+            if let Some(rc) = &bc.restriction_criteria {
+                lines.push(field("  Restriction:", fmt_restriction(rc)));
+            }
+            lines.push(note("  R: edit restriction criteria"));
         }
-        lines.push(note("  R: edit restriction criteria"));
     }
 
     // Collect ancestor entry layers (oldest ancestor first).

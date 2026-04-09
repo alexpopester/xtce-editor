@@ -5,5 +5,5 @@ pub mod schema_validator;
 pub mod serializer;
 pub mod validator;
 
-pub use error::{ParseError, ValidationError, XtceError};
+pub use error::{ErrorItemKind, ErrorLocation, ParseError, ValidationError, XtceError};
 pub use model::SpaceSystem;

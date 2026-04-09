@@ -37,6 +37,10 @@ pub enum Action {
     Expand,
     /// Collapse the selected node (no-op if already collapsed or not expandable).
     Collapse,
+    /// Smart left: collapse if expanded, otherwise jump to the parent node.
+    NavLeft,
+    /// Smart right: expand if collapsed, otherwise move to the first child.
+    NavRight,
     /// Cycle keyboard focus to the next panel.
     FocusNext,
     /// Reload the current file from disk.
@@ -199,8 +203,8 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         }
         // Expand / collapse
         (KeyCode::Enter, _) | (KeyCode::Char(' '), _) => Some(Action::ToggleExpand),
-        (KeyCode::Right, _) | (KeyCode::Char('l'), _) => Some(Action::Expand),
-        (KeyCode::Left, _) | (KeyCode::Char('h'), _) => Some(Action::Collapse),
+        (KeyCode::Right, _) | (KeyCode::Char('l'), _) => Some(Action::NavRight),
+        (KeyCode::Left, _) | (KeyCode::Char('h'), _) => Some(Action::NavLeft),
         // Panel management
         (KeyCode::Tab, _) => Some(Action::FocusNext),
         // Editing

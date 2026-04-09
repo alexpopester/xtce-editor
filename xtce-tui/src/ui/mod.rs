@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -573,11 +573,13 @@ fn render_errors_overlay(app: &App, frame: &mut Frame) {
     let area = centered_rect(75, 70, frame.area());
     frame.render_widget(Clear, area);
 
-    let total = app.validation_errors.len() + app.schema_errors.len();
+    let sem_count = app.validation_errors.len();
+    let xsd_count = app.schema_errors.len();
+    let total = sem_count + xsd_count;
     let has_errors = total > 0;
     let border_color = if has_errors { Color::Red } else { theme::BORDER_FOCUSED };
     let title = if has_errors {
-        format!(" Validation Errors ({total}) — e/Esc to close ")
+        format!(" Validation Errors ({total}) — j/k:scroll  s:fold-semantic  x:fold-schema  e/Esc:close ")
     } else {
         " Validation Errors — e/Esc to close ".to_string()
     };
@@ -593,15 +595,35 @@ fn render_errors_overlay(app: &App, frame: &mut Frame) {
         vec![Line::from(Span::styled("  No validation errors", theme::dim()))]
     } else {
         let mut out: Vec<Line<'static>> = Vec::new();
-        if !app.validation_errors.is_empty() {
-            out.push(Line::from(Span::styled("Semantic", theme::group_node())));
+
+        if sem_count > 0 {
+            let fold_indicator = if app.error_fold_semantic { "\u{25b6}" } else { "\u{25bc}" };
+            out.push(Line::from(vec![
+                Span::styled(format!("{fold_indicator} Semantic"), theme::group_node()),
+                Span::styled(format!(" ({sem_count})"), theme::dim()),
+                Span::styled("  [s:fold  j/k:select  Enter:jump]", theme::dim()),
+            ]));
+            if !app.error_fold_semantic {
+                out.push(Line::from(""));
+                for (i, e) in app.validation_errors.iter().enumerate() {
+                    let selected = i == app.error_cursor;
+                    out.extend(error_lines_with_cursor(e, selected));
+                }
+            }
             out.push(Line::from(""));
-            out.extend(app.validation_errors.iter().flat_map(|e| error_lines(e)));
         }
-        if !app.schema_errors.is_empty() {
-            out.push(Line::from(Span::styled("Schema (XSD)", theme::group_node())));
-            out.push(Line::from(""));
-            out.extend(app.schema_errors.iter().flat_map(|e| error_lines(e)));
+
+        if xsd_count > 0 {
+            let fold_indicator = if app.error_fold_schema { "▶" } else { "▼" };
+            out.push(Line::from(vec![
+                Span::styled(format!("{fold_indicator} Schema (XSD)"), theme::group_node()),
+                Span::styled(format!(" ({xsd_count})"), theme::dim()),
+                Span::styled("  [x to fold]", theme::dim()),
+            ]));
+            if !app.error_fold_schema {
+                out.push(Line::from(""));
+                out.extend(app.schema_errors.iter().flat_map(|e| error_lines(e)));
+            }
         }
         out
     };
@@ -609,15 +631,33 @@ fn render_errors_overlay(app: &App, frame: &mut Frame) {
     let content_height = lines.len();
     let visible_height = inner.height as usize;
     let scroll = app
-        .detail_scroll
+        .error_scroll
         .min(content_height.saturating_sub(visible_height));
 
-    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((scroll as u16, 0))
+            .wrap(Wrap { trim: false }),
+        inner,
+    );
+}
+
+fn error_lines_with_cursor(e: &ValidationError, selected: bool) -> Vec<Line<'static>> {
+    let mut lines = error_lines(e);
+    if selected && !lines.is_empty() {
+        // Prepend a cursor indicator on the first line.
+        if let Some(first) = lines.first_mut() {
+            let mut spans = vec![Span::styled("\u{25b6} ", theme::section_header())];
+            spans.extend(first.spans.drain(..));
+            *first = Line::from(spans);
+        }
+    }
+    lines
 }
 
 fn error_lines(e: &ValidationError) -> Vec<Line<'static>> {
     match e {
-        ValidationError::UnresolvedReference { name, context } => vec![
+        ValidationError::UnresolvedReference { name, context, .. } => vec![
             Line::from(vec![
                 Span::styled("  Unresolved:  ", theme::error()),
                 Span::styled(name.clone(), theme::detail_value()),
@@ -625,7 +665,7 @@ fn error_lines(e: &ValidationError) -> Vec<Line<'static>> {
             Line::from(Span::styled(format!("    in {}", context), theme::dim())),
             Line::from(""),
         ],
-        ValidationError::CyclicInheritance { name } => vec![
+        ValidationError::CyclicInheritance { name, .. } => vec![
             Line::from(vec![
                 Span::styled("  Cyclic:      ", theme::error()),
                 Span::styled(name.clone(), theme::detail_value()),
@@ -647,6 +687,14 @@ fn error_lines(e: &ValidationError) -> Vec<Line<'static>> {
             Line::from(vec![
                 Span::styled("  Missing:     ", theme::error()),
                 Span::styled(format!("{} on {} '{}'", field, element, name), theme::detail_value()),
+            ]),
+            Line::from(""),
+        ],
+        ValidationError::SelfReferentialInheritance { name, .. } => vec![
+            Line::from(vec![
+                Span::styled("  Self-ref:    ", theme::error()),
+                Span::styled(name.clone(), theme::detail_value()),
+                Span::styled(" inherits from itself".to_string(), theme::dim()),
             ]),
             Line::from(""),
         ],

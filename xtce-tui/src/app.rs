@@ -8,7 +8,7 @@ use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 
 use ratatui::widgets::ListState;
-use xtce_core::{ValidationError, SpaceSystem};
+use xtce_core::{ErrorItemKind, ErrorLocation, ValidationError, SpaceSystem};
 
 use crate::event::{Action, EditField};
 use crate::ui::{NodeId, TreeNode, build_tree, enumerate_all_nodes};
@@ -326,6 +326,14 @@ pub struct App {
     pub validation_errors: Vec<ValidationError>,
     /// Scroll offset for the detail panel (in lines).
     pub detail_scroll: usize,
+    /// Scroll offset for the error overlay (in lines).
+    pub error_scroll: usize,
+    /// Index of the currently selected semantic error (for jump-to-error).
+    pub error_cursor: usize,
+    /// Whether the "Semantic" error group is collapsed in the error overlay.
+    pub error_fold_semantic: bool,
+    /// Whether the "Schema (XSD)" error group is collapsed in the error overlay.
+    pub error_fold_schema: bool,
     /// Whether the validation error overlay is visible.
     pub show_errors: bool,
     /// Whether the help overlay is visible.
@@ -334,8 +342,11 @@ pub struct App {
     pub search_mode: bool,
     /// Current search query string.
     pub search_query: String,
+    /// Pre-computed flat list of every (NodeId, label) pair in the tree.
+    /// Rebuilt only when the model changes, not on every keystroke.
+    pub search_index: Vec<(NodeId, String)>,
     /// All [`NodeId`]s (across the entire SpaceSystem, not just visible rows)
-    /// whose label matches `search_query`.
+    /// whose label fuzzy-matches `search_query`.
     pub search_matches: Vec<NodeId>,
     /// Which element of `search_matches` is the "active" (jump-to) match.
     pub search_match_cursor: usize,
@@ -387,6 +398,7 @@ impl App {
         let expanded = HashSet::new();
         let validation_errors = xtce_core::validator::validate(&space_system);
         let tree = build_tree(&space_system, &expanded);
+        let search_index = enumerate_all_nodes(&space_system);
         let mut list_state = ListState::default();
         if !tree.is_empty() {
             list_state.select(Some(0));
@@ -401,10 +413,15 @@ impl App {
             focus: Focus::Tree,
             validation_errors,
             detail_scroll: 0,
+            error_scroll: 0,
+            error_cursor: 0,
+            error_fold_semantic: false,
+            error_fold_schema: false,
             show_errors: false,
             show_help: false,
             search_mode: false,
             search_query: String::new(),
+            search_index,
             search_matches: Vec::new(),
             search_match_cursor: 0,
             dirty: false,
@@ -589,10 +606,39 @@ impl App {
 
         // Overlays consume navigation and toggle keys while open.
         if self.show_errors {
+            let sem_len = self.validation_errors.len();
             match action {
-                Action::ToggleErrors | Action::CloseOverlay => self.show_errors = false,
-                Action::MoveUp => self.detail_scroll = self.detail_scroll.saturating_sub(1),
-                Action::MoveDown => self.detail_scroll += 1,
+                Action::ToggleErrors | Action::CloseOverlay => {
+                    self.show_errors = false;
+                    self.error_scroll = 0;
+                }
+                Action::MoveUp => {
+                    self.error_cursor = self.error_cursor.saturating_sub(1);
+                    self.error_scroll = self.error_scroll.saturating_sub(1);
+                }
+                Action::MoveDown => {
+                    if sem_len > 0 {
+                        self.error_cursor = (self.error_cursor + 1).min(sem_len - 1);
+                    }
+                    self.error_scroll += 1;
+                }
+                Action::PageUp => self.error_scroll = self.error_scroll.saturating_sub(10),
+                Action::PageDown => self.error_scroll += 10,
+                // Enter: jump to the selected error's location in the tree.
+                Action::ToggleExpand => {
+                    if let Some(node_id) = self
+                        .validation_errors
+                        .get(self.error_cursor)
+                        .and_then(|e| error_location_to_node_id(e))
+                    {
+                        self.show_errors = false;
+                        self.error_scroll = 0;
+                        self.jump_to(node_id);
+                    }
+                }
+                // s = toggle Semantic group, x = toggle Schema group
+                Action::Save => self.error_fold_semantic = !self.error_fold_semantic,
+                Action::EntryRemoveLast => self.error_fold_schema = !self.error_fold_schema,
                 _ => {}
             }
             return;
@@ -615,6 +661,8 @@ impl App {
             Action::ToggleExpand => self.toggle_expand(),
             Action::Expand => self.expand_current(),
             Action::Collapse => self.collapse_current(),
+            Action::NavLeft => self.nav_left(),
+            Action::NavRight => self.nav_right(),
             Action::FocusNext => self.cycle_focus(),
             Action::Reload => {
                 if self.dirty {
@@ -815,6 +863,56 @@ impl App {
         }
     }
 
+    /// Smart left: collapse the current node if expanded; otherwise jump to its
+    /// parent (the nearest ancestor row in the visible tree).
+    fn nav_left(&mut self) {
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        if node.expandable && node.expanded {
+            // Collapse in place.
+            let id = node.node_id.clone();
+            self.expanded.remove(&id);
+            self.rebuild_tree();
+        } else {
+            // Jump to parent: scan backward for the first row with a smaller depth.
+            let current_depth = self.tree.get(self.cursor).map(|n| n.depth).unwrap_or(0);
+            if current_depth == 0 {
+                return; // already at a root node
+            }
+            for i in (0..self.cursor).rev() {
+                if self.tree[i].depth < current_depth {
+                    self.cursor = i;
+                    self.list_state.select(Some(i));
+                    self.detail_scroll = 0;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Smart right: expand the current node if collapsed; otherwise move the
+    /// cursor to the first visible child (cursor + 1 after an expand).
+    fn nav_right(&mut self) {
+        let Some(node) = self.tree.get(self.cursor) else { return };
+        if node.expandable && !node.expanded {
+            let id = node.node_id.clone();
+            self.expanded.insert(id);
+            self.rebuild_tree();
+            // Move into the first child that appeared.
+            if self.cursor + 1 < self.tree.len() {
+                self.cursor += 1;
+                self.list_state.select(Some(self.cursor));
+                self.detail_scroll = 0;
+            }
+        } else if node.expanded {
+            // Already expanded — move into the first child.
+            if self.cursor + 1 < self.tree.len() {
+                self.cursor += 1;
+                self.list_state.select(Some(self.cursor));
+                self.detail_scroll = 0;
+            }
+        }
+    }
+
     fn cycle_focus(&mut self) {
         self.focus = match self.focus {
             Focus::Tree => Focus::Detail,
@@ -830,6 +928,8 @@ impl App {
         }
         self.list_state.select(Some(self.cursor));
         self.detail_scroll = 0;
+        // Rebuild the search index from the updated model, then re-filter.
+        self.search_index = enumerate_all_nodes(&self.space_system);
         self.recompute_search();
     }
 
@@ -847,22 +947,31 @@ impl App {
         }
     }
 
-    /// Recompute `search_matches` by scanning the entire SpaceSystem hierarchy,
-    /// regardless of which nodes are currently expanded.
+    /// Recompute `search_matches` by fuzzy-matching the pre-built `search_index`.
     ///
-    /// This means collapsed nodes are always findable; navigating to a match
-    /// automatically expands its ancestors via [`Self::jump_to`].
+    /// Uses a subsequence scorer: the query characters must all appear in order
+    /// in the label (case-insensitive).  Results are sorted by score so closer /
+    /// prefix matches appear first.  The index is rebuilt on model changes
+    /// (not here), so this runs in O(n) over the index with no allocation beyond
+    /// the result vec.
     pub fn recompute_search(&mut self) {
         self.search_matches.clear();
         if self.search_query.is_empty() {
             return;
         }
-        let q = self.search_query.to_lowercase();
-        self.search_matches = enumerate_all_nodes(&self.space_system)
-            .into_iter()
-            .filter(|(_, label)| label.to_lowercase().contains(&q))
-            .map(|(id, _)| id)
+        let q: Vec<char> = self.search_query.to_lowercase().chars().collect();
+
+        // Collect (score, id) for every matching node, then sort by score desc.
+        let mut scored: Vec<(i32, NodeId)> = self
+            .search_index
+            .iter()
+            .filter_map(|(id, label)| {
+                fuzzy_score(&q, &label.to_lowercase()).map(|s| (s, id.clone()))
+            })
             .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        self.search_matches = scored.into_iter().map(|(_, id)| id).collect();
+
         // Clamp cursor without resetting it so position is preserved on rebuild.
         if !self.search_matches.is_empty() {
             self.search_match_cursor =
@@ -3460,6 +3569,73 @@ fn make_argument_type(
         TypeVariant::Aggregate => ArgumentType::Aggregate(AggregateArgumentType::new(name)),
         TypeVariant::Array     => ArgumentType::Array(ArrayArgumentType::new(name, type_ref.unwrap_or(""))),
     }
+}
+
+/// Convert a `ValidationError`'s optional `ErrorLocation` into a `NodeId` that
+/// the TUI can jump to.
+fn error_location_to_node_id(e: &ValidationError) -> Option<NodeId> {
+    let loc = match e {
+        ValidationError::UnresolvedReference { location, .. } => location.as_ref()?,
+        ValidationError::CyclicInheritance { location, .. } => location.as_ref()?,
+        ValidationError::SelfReferentialInheritance { location, .. } => location.as_ref()?,
+        _ => return None,
+    };
+    Some(location_to_node_id(loc))
+}
+
+fn location_to_node_id(loc: &ErrorLocation) -> NodeId {
+    match loc.item_kind {
+        ErrorItemKind::Container    => NodeId::TmContainer(loc.ss_path.clone(), loc.item_name.clone()),
+        ErrorItemKind::Parameter    => NodeId::TmParameter(loc.ss_path.clone(), loc.item_name.clone()),
+        ErrorItemKind::ParameterType => NodeId::TmParameterType(loc.ss_path.clone(), loc.item_name.clone()),
+        ErrorItemKind::ArgumentType => NodeId::CmdArgumentType(loc.ss_path.clone(), loc.item_name.clone()),
+        ErrorItemKind::MetaCommand  => NodeId::CmdMetaCommand(loc.ss_path.clone(), loc.item_name.clone()),
+    }
+}
+
+/// Fuzzy subsequence scorer.
+///
+/// Returns `Some(score)` if every character in `query` appears in `text` in
+/// order (case-insensitive).  Returns `None` if the query is not a subsequence.
+///
+/// Scoring bonuses (higher = ranked first):
+/// - +50 per character that starts a word boundary (after `_`, `-`, `.`, ` `)
+/// - +30 per character that matches at the same position as the query char index
+///   (i.e. starts at position 0 for first char → prefix match reward)
+/// - +1 per consecutive matched character run
+///
+/// This is O(|text|) per call and allocation-free.
+fn fuzzy_score(query: &[char], text: &str) -> Option<i32> {
+    let mut qi = 0; // query index
+    let mut score: i32 = 0;
+    let mut consecutive: i32 = 0;
+    let chars: Vec<char> = text.chars().collect();
+
+    for (ti, &tc) in chars.iter().enumerate() {
+        if qi >= query.len() {
+            break;
+        }
+        if tc == query[qi] {
+            // Consecutive run bonus.
+            consecutive += 1;
+            score += consecutive;
+            // Word-boundary bonus.
+            let at_boundary = ti == 0
+                || matches!(chars[ti - 1], '_' | '-' | '.' | ' ');
+            if at_boundary {
+                score += 50;
+            }
+            // Prefix alignment bonus: first query char matching at position 0, etc.
+            if ti == qi as usize {
+                score += 30;
+            }
+            qi += 1;
+        } else {
+            consecutive = 0;
+        }
+    }
+
+    if qi == query.len() { Some(score) } else { None }
 }
 
 fn parameter_type_variant_label(pt: &xtce_core::model::telemetry::ParameterType) -> &'static str {
