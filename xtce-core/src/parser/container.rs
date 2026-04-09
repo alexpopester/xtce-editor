@@ -63,6 +63,7 @@ pub(super) fn parse_sequence_container<R: BufRead>(
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"LongDescription" => c.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => c.alias_set = super::types::parse_alias_set(ctx)?,
                 b"BaseContainer" => c.base_container = Some(parse_base_container(ctx, &e)?),
                 b"EntryList" => c.entry_list = parse_entry_list(ctx, &e)?,
                 _ => ctx.skip_element(&e)?,

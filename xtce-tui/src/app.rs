@@ -374,6 +374,9 @@ pub struct App {
     pub undo_stack: VecDeque<SpaceSystem>,
     /// Redo stack: snapshots pushed by `undo`. Cleared on any new mutation.
     pub redo_stack: VecDeque<SpaceSystem>,
+    /// Errors from the last XSD schema validation run (after save). Cleared
+    /// when a new edit is made and re-populated after the next save.
+    pub schema_errors: Vec<ValidationError>,
 }
 
 impl App {
@@ -421,6 +424,7 @@ impl App {
             unit_edit_state: None,
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
+            schema_errors: Vec::new(),
         }
     }
 
@@ -596,6 +600,8 @@ impl App {
         if self.show_help {
             match action {
                 Action::ToggleHelp | Action::CloseOverlay => self.show_help = false,
+                Action::MoveUp => self.detail_scroll = self.detail_scroll.saturating_sub(1),
+                Action::MoveDown => self.detail_scroll += 1,
                 _ => {}
             }
             return;
@@ -722,6 +728,8 @@ impl App {
         }
         self.undo_stack.push_back(self.space_system.clone());
         self.redo_stack.clear();
+        // Schema errors are from the last save; clear them when the document changes.
+        self.schema_errors.clear();
     }
 
     fn undo(&mut self) {
@@ -1155,6 +1163,13 @@ impl App {
                 Ok(()) => {
                     self.dirty = false;
                     self.save_error = None;
+                    self.schema_errors =
+                        match xtce_core::schema_validator::validate_schema(&bytes) {
+                            Ok(errors) => errors,
+                            Err(msg) => vec![ValidationError::SchemaError(
+                                format!("xmllint unavailable: {msg}"),
+                            )],
+                        };
                 }
                 Err(e) => {
                     self.save_error = Some(format!("Write error: {e}"));

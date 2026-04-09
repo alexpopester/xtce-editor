@@ -2,5 +2,6 @@
 members = [
     "xtce-core",
     "xtce-tui",
+    "xtce-tools",
 ]
 resolver = "2"

@@ -33,6 +33,9 @@ pub(super) fn parse_command_metadata<R: BufRead>(
                     super::types::parse_argument_type_set(ctx, &mut command)?
                 }
                 b"MetaCommandSet" => parse_meta_command_set(ctx, &mut command)?,
+                b"CommandContainerSet" => {
+                    parse_command_container_set(ctx, &mut command)?
+                }
                 _ => ctx.skip_element(&e)?,
             },
             Event::End(_) => break,
@@ -278,4 +281,33 @@ fn parse_fixed_value_entry<R: BufRead>(
     }
 
     Ok(FixedValueEntry { size_in_bits, binary_value, location })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CommandContainerSet
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Populate `command.command_containers` by consuming a `<CommandContainerSet>`
+/// element. Each `<SequenceContainer>` child is a shared command packet layout.
+fn parse_command_container_set<R: BufRead>(
+    ctx: &mut ParseContext<R>,
+    command: &mut CommandMetaData,
+) -> Result<(), ParseError> {
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"SequenceContainer" => {
+                    let c = super::container::parse_sequence_container(ctx, &e)?;
+                    command.command_containers.insert(c.name.clone(), c);
+                }
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof { expected: "</CommandContainerSet>" })
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }

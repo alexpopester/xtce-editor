@@ -2,16 +2,6 @@
 //!
 //! Serializes a [`SpaceSystem`] tree to a valid XTCE v1.2 XML document using
 //! `quick-xml`'s writer API.
-//!
-//! ## Task coverage
-//! - **T1** — Scaffold: XML declaration, [`write_space_system`], [`write_header`],
-//!   and the low-level [`wt`] / attribute-building helpers.
-//! - **T2** — Shared encoding types: [`write_unit_set`], [`write_alias_set`],
-//!   all four `write_*_data_encoding` functions, and [`write_calibrator`].
-//! - **T3** — ParameterTypes: [`write_parameter_type_set`] and all eight
-//!   `write_*_parameter_type` functions; partial [`write_telemetry_meta_data`].
-//! - T4–T6 are implemented in subsequent commits (Parameters, Containers,
-//!   ArgumentTypes, MetaCommands, full CommandMetaData wiring).
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::Writer;
@@ -54,7 +44,7 @@ pub fn serialize(space_system: &SpaceSystem) -> Result<Vec<u8>, ParseError> {
     let mut w = Writer::new(Vec::new());
     w.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))?;
     w.write_event(Event::Text(BytesText::new("\n")))?;
-    write_space_system(&mut w, space_system)?;
+    write_space_system(&mut w, space_system, true)?;
     Ok(w.into_inner())
 }
 
@@ -62,8 +52,11 @@ pub fn serialize(space_system: &SpaceSystem) -> Result<Vec<u8>, ParseError> {
 // T1 — Scaffold: SpaceSystem + Header
 // ─────────────────────────────────────────────────────────────────────────────
 
-fn write_space_system(w: &mut W, ss: &SpaceSystem) -> Result<(), ParseError> {
+fn write_space_system(w: &mut W, ss: &SpaceSystem, is_root: bool) -> Result<(), ParseError> {
     let mut e = BytesStart::new("SpaceSystem");
+    if is_root {
+        e.push_attribute(("xmlns", "http://www.omg.org/spec/XTCE/20180204"));
+    }
     e.push_attribute(("name", ss.name.as_str()));
     if let Some(d) = &ss.short_description {
         e.push_attribute(("shortDescription", d.as_str()));
@@ -85,7 +78,7 @@ fn write_space_system(w: &mut W, ss: &SpaceSystem) -> Result<(), ParseError> {
     }
 
     for child in &ss.sub_systems {
-        write_space_system(w, child)?;
+        write_space_system(w, child, false)?;
     }
 
     w.write_event(Event::End(BytesEnd::new("SpaceSystem")))?;
@@ -139,12 +132,11 @@ fn write_header(w: &mut W, h: &Header) -> Result<(), ParseError> {
 }
 
 fn write_author_info(w: &mut W, a: &AuthorInfo) -> Result<(), ParseError> {
-    let mut e = BytesStart::new("AuthorInformation");
-    e.push_attribute(("name", a.name.as_str()));
-    if let Some(r) = &a.role {
-        e.push_attribute(("role", r.as_str()));
-    }
-    Ok(w.write_event(Event::Empty(e))?)
+    let text = match &a.role {
+        Some(r) => format!("{} ({})", a.name, r),
+        None => a.name.clone(),
+    };
+    wt(w, "Author", &text)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -818,10 +810,10 @@ fn write_sequence_container(w: &mut W, c: &SequenceContainer) -> Result<(), Pars
         wt(w, "LongDescription", d)?;
     }
     write_alias_set(w, &c.alias_set)?;
+    write_entry_list(w, &c.entry_list)?;
     if let Some(bc) = &c.base_container {
         write_base_container(w, bc)?;
     }
-    write_entry_list(w, &c.entry_list)?;
     w.write_event(Event::End(BytesEnd::new("SequenceContainer")))?;
     Ok(())
 }
@@ -1364,10 +1356,10 @@ fn write_command_container(w: &mut W, cc: &CommandContainer) -> Result<(), Parse
     let mut e = BytesStart::new("CommandContainer");
     e.push_attribute(("name", cc.name.as_str()));
     w.write_event(Event::Start(e))?;
+    write_command_entry_list(w, &cc.entry_list)?;
     if let Some(bc) = &cc.base_container {
         write_base_container(w, bc)?;
     }
-    write_command_entry_list(w, &cc.entry_list)?;
     w.write_event(Event::End(BytesEnd::new("CommandContainer")))?;
     Ok(())
 }
@@ -1499,8 +1491,10 @@ mod tests {
         let h = rt.header.unwrap();
         assert_eq!(h.version.as_deref(), Some("2.0"));
         assert_eq!(h.classification.as_deref(), Some("Unclassified"));
-        assert_eq!(h.author_set[0].name, "Alice");
-        assert_eq!(h.author_set[0].role.as_deref(), Some("author"));
+        // Role is encoded inline: serializer writes "<Author>name (role)</Author>"
+        // and the parser reads the whole text back as name with no separate role field.
+        assert_eq!(h.author_set[0].name, "Alice (author)");
+        assert_eq!(h.author_set[0].role, None);
         assert_eq!(h.note_set[0], "First note");
     }
 
@@ -1833,6 +1827,241 @@ mod tests {
         assert!(t.encoding.is_some());
     }
 
+    // ── T6 extended: remaining ArgumentType variants ──────────────────────────
+
+    #[test]
+    fn t6_boolean_argument_type_round_trip() {
+        use crate::model::command::{ArgumentType, BooleanArgumentType, CommandMetaData};
+
+        let mut t = BooleanArgumentType::new("EnableFlag");
+        t.short_description = Some("on/off".into());
+        t.one_string_value = Some("ENABLED".into());
+        t.zero_string_value = Some("DISABLED".into());
+        t.base_type = Some("BaseBool".into());
+
+        let mut cm = CommandMetaData::default();
+        cm.argument_types.insert("EnableFlag".into(), ArgumentType::Boolean(t));
+        let mut ss = SpaceSystem::new("Test");
+        ss.command = Some(cm);
+
+        let rt = round_trip(&ss);
+        let at = rt.command.unwrap().argument_types.get("EnableFlag").cloned().unwrap();
+        let ArgumentType::Boolean(b) = at else { panic!("expected Boolean") };
+        assert_eq!(b.short_description.as_deref(), Some("on/off"));
+        assert_eq!(b.one_string_value.as_deref(), Some("ENABLED"));
+        assert_eq!(b.zero_string_value.as_deref(), Some("DISABLED"));
+        assert_eq!(b.base_type.as_deref(), Some("BaseBool"));
+    }
+
+    #[test]
+    fn t6_string_argument_type_round_trip() {
+        use crate::model::command::{ArgumentType, CommandMetaData, StringArgumentType};
+        use crate::model::types::{StringDataEncoding, StringEncoding, StringSize};
+
+        let mut t = StringArgumentType::new("Callsign");
+        t.encoding = Some(StringDataEncoding {
+            encoding: StringEncoding::UTF8,
+            byte_order: None,
+            size_in_bits: Some(StringSize::Fixed(64)),
+        });
+        t.initial_value = Some("DEFAULT".into());
+
+        let mut cm = CommandMetaData::default();
+        cm.argument_types.insert("Callsign".into(), ArgumentType::String(t));
+        let mut ss = SpaceSystem::new("Test");
+        ss.command = Some(cm);
+
+        let rt = round_trip(&ss);
+        let at = rt.command.unwrap().argument_types.get("Callsign").cloned().unwrap();
+        let ArgumentType::String(s) = at else { panic!("expected String") };
+        let enc = s.encoding.as_ref().unwrap();
+        assert_eq!(enc.encoding, StringEncoding::UTF8);
+        assert_eq!(enc.size_in_bits, Some(StringSize::Fixed(64)));
+    }
+
+    #[test]
+    fn t6_binary_argument_type_round_trip() {
+        use crate::model::command::{ArgumentType, BinaryArgumentType, CommandMetaData};
+        use crate::model::types::{BinaryDataEncoding, BinarySize};
+
+        let mut t = BinaryArgumentType::new("RawFrame");
+        t.encoding = Some(BinaryDataEncoding { size_in_bits: BinarySize::Fixed(128) });
+
+        let mut cm = CommandMetaData::default();
+        cm.argument_types.insert("RawFrame".into(), ArgumentType::Binary(t));
+        let mut ss = SpaceSystem::new("Test");
+        ss.command = Some(cm);
+
+        let rt = round_trip(&ss);
+        let at = rt.command.unwrap().argument_types.get("RawFrame").cloned().unwrap();
+        let ArgumentType::Binary(b) = at else { panic!("expected Binary") };
+        let enc = b.encoding.as_ref().unwrap();
+        assert_eq!(enc.size_in_bits, BinarySize::Fixed(128));
+    }
+
+    #[test]
+    fn t6_aggregate_argument_type_round_trip() {
+        use crate::model::command::{
+            AggregateArgumentType, ArgumentMember, ArgumentType, CommandMetaData,
+        };
+
+        let mut t = AggregateArgumentType::new("Point");
+        t.short_description = Some("2D point".into());
+        t.member_list = vec![
+            ArgumentMember { name: "x".into(), type_ref: "Int16T".into(), short_description: Some("x coord".into()) },
+            ArgumentMember { name: "y".into(), type_ref: "Int16T".into(), short_description: None },
+        ];
+
+        let mut cm = CommandMetaData::default();
+        cm.argument_types.insert("Point".into(), ArgumentType::Aggregate(t));
+        let mut ss = SpaceSystem::new("Test");
+        ss.command = Some(cm);
+
+        let rt = round_trip(&ss);
+        let at = rt.command.unwrap().argument_types.get("Point").cloned().unwrap();
+        let ArgumentType::Aggregate(a) = at else { panic!("expected Aggregate") };
+        assert_eq!(a.member_list.len(), 2);
+        assert_eq!(a.member_list[0].name, "x");
+        assert_eq!(a.member_list[0].type_ref, "Int16T");
+        assert_eq!(a.member_list[0].short_description.as_deref(), Some("x coord"));
+        assert_eq!(a.member_list[1].short_description, None);
+    }
+
+    #[test]
+    fn t6_array_argument_type_round_trip() {
+        use crate::model::command::{ArgumentType, ArrayArgumentType, CommandMetaData};
+
+        let mut t = ArrayArgumentType::new("Matrix", "Float32T");
+        t.number_of_dimensions = 2;
+        t.short_description = Some("2D matrix".into());
+
+        let mut cm = CommandMetaData::default();
+        cm.argument_types.insert("Matrix".into(), ArgumentType::Array(t));
+        let mut ss = SpaceSystem::new("Test");
+        ss.command = Some(cm);
+
+        let rt = round_trip(&ss);
+        let at = rt.command.unwrap().argument_types.get("Matrix").cloned().unwrap();
+        let ArgumentType::Array(a) = at else { panic!("expected Array") };
+        assert_eq!(a.array_type_ref, "Float32T");
+        assert_eq!(a.number_of_dimensions, 2);
+        assert_eq!(a.short_description.as_deref(), Some("2D matrix"));
+    }
+
+    // ── T6/T3 extended: alias set serialization ───────────────────────────────
+    // Note: the parser does not yet read <AliasSet>; these tests verify the
+    // serializer output directly rather than doing a full round-trip.
+
+    #[test]
+    fn t6_alias_set_on_argument_type_serialized() {
+        use crate::model::command::{ArgumentType, CommandMetaData, IntegerArgumentType};
+        use crate::model::types::Alias;
+
+        let mut t = IntegerArgumentType::new("CmdInt");
+        t.alias_set = vec![
+            Alias { name_space: "yamcs".into(), alias: "CMD_INT".into() },
+            Alias { name_space: "mcs".into(), alias: "int_cmd".into() },
+        ];
+
+        let mut cm = CommandMetaData::default();
+        cm.argument_types.insert("CmdInt".into(), ArgumentType::Integer(t));
+        let mut ss = SpaceSystem::new("Test");
+        ss.command = Some(cm);
+
+        let bytes = serialize(&ss).unwrap();
+        let xml = String::from_utf8(bytes).unwrap();
+        assert!(xml.contains("<AliasSet>"), "expected AliasSet element");
+        assert!(xml.contains(r#"nameSpace="yamcs""#), "expected yamcs namespace");
+        assert!(xml.contains(r#"alias="CMD_INT""#), "expected CMD_INT alias");
+        assert!(xml.contains(r#"nameSpace="mcs""#), "expected mcs namespace");
+    }
+
+    #[test]
+    fn t3_alias_set_on_parameter_type_serialized() {
+        use crate::model::telemetry::{IntegerParameterType, ParameterType};
+        use crate::model::types::Alias;
+
+        let mut t = IntegerParameterType::new("IntT");
+        t.alias_set = vec![Alias { name_space: "ccsds".into(), alias: "UINT16".into() }];
+        let ss = make_ss_with_type(ParameterType::Integer(t));
+
+        let bytes = serialize(&ss).unwrap();
+        let xml = String::from_utf8(bytes).unwrap();
+        assert!(xml.contains("<AliasSet>"), "expected AliasSet element");
+        assert!(xml.contains(r#"nameSpace="ccsds""#));
+        assert!(xml.contains(r#"alias="UINT16""#));
+    }
+
+    // ── T4 extended: remaining DataSource variants ────────────────────────────
+
+    #[test]
+    fn t4_data_source_constant_local_ground_round_trip() {
+        use crate::model::telemetry::{DataSource, Parameter, ParameterProperties, TelemetryMetaData};
+
+        let make_param = |name: &str, ds: DataSource| {
+            let mut p = Parameter::new(name, "T");
+            p.parameter_properties = Some(ParameterProperties { data_source: Some(ds), read_only: false });
+            p
+        };
+
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = TelemetryMetaData::default();
+        tm.parameters.insert("C".into(), make_param("C", DataSource::Constant));
+        tm.parameters.insert("L".into(), make_param("L", DataSource::Local));
+        tm.parameters.insert("G".into(), make_param("G", DataSource::Ground));
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let rt_tm = rt.telemetry.unwrap();
+
+        let ds_of = |name: &str| {
+            rt_tm.parameters.get(name).unwrap()
+                .parameter_properties.as_ref().unwrap()
+                .data_source.as_ref().cloned()
+        };
+        assert_eq!(ds_of("C"), Some(DataSource::Constant));
+        assert_eq!(ds_of("L"), Some(DataSource::Local));
+        assert_eq!(ds_of("G"), Some(DataSource::Ground));
+    }
+
+    // ── T3 extended: long description on ParameterType ───────────────────────
+
+    #[test]
+    fn t3_long_description_on_parameter_type_round_trip() {
+        use crate::model::telemetry::{FloatParameterType, ParameterType};
+
+        let mut t = FloatParameterType::new("Voltage");
+        t.long_description = Some("The bus voltage in volts.".into());
+        let ss = make_ss_with_type(ParameterType::Float(t));
+        let rt = round_trip(&ss);
+        let tm = rt.telemetry.unwrap();
+        let ParameterType::Float(f) = tm.parameter_types.get("Voltage").unwrap() else {
+            panic!("expected Float")
+        };
+        assert_eq!(f.long_description.as_deref(), Some("The bus voltage in volts."));
+    }
+
+    // ── T6 extended: argument type baseType round-trip ────────────────────────
+
+    #[test]
+    fn t6_base_type_on_argument_type_round_trip() {
+        use crate::model::command::{ArgumentType, CommandMetaData, FloatArgumentType};
+
+        let mut t = FloatArgumentType::new("DerivedFloat");
+        t.base_type = Some("BaseFloatT".into());
+        t.size_in_bits = Some(32);
+
+        let mut cm = CommandMetaData::default();
+        cm.argument_types.insert("DerivedFloat".into(), ArgumentType::Float(t));
+        let mut ss = SpaceSystem::new("Test");
+        ss.command = Some(cm);
+
+        let rt = round_trip(&ss);
+        let at = rt.command.unwrap().argument_types.get("DerivedFloat").cloned().unwrap();
+        let ArgumentType::Float(f) = at else { panic!("expected Float") };
+        assert_eq!(f.base_type.as_deref(), Some("BaseFloatT"));
+    }
+
     #[test]
     fn t6_meta_command_round_trip() {
         use crate::model::command::{
@@ -2093,5 +2322,428 @@ mod tests {
         let orig_mc = orig_cm.meta_commands.get("PowerCycleSubsystem").unwrap();
         assert_eq!(rt_mc.argument_list.len(), orig_mc.argument_list.len());
         assert_eq!(rt_mc.argument_list[0].name, orig_mc.argument_list[0].name);
+    }
+
+    // ── T5 extended: BooleanExpression restriction criteria ───────────────────
+
+    #[test]
+    fn t5_boolean_expression_and_restriction_round_trip() {
+        use crate::model::container::{
+            BaseContainer, BooleanExpression, Comparison, ComparisonOperator,
+            RestrictionCriteria, SequenceContainer,
+        };
+
+        let make_cmp = |param: &str, val: &str| Comparison {
+            parameter_ref: param.into(),
+            value: val.into(),
+            comparison_operator: ComparisonOperator::Equality,
+            use_calibrated_value: false,
+        };
+        let expr = BooleanExpression::And(vec![
+            BooleanExpression::Condition(make_cmp("APID", "5")),
+            BooleanExpression::Condition(make_cmp("Version", "1")),
+        ]);
+
+        let mut base = SequenceContainer::new("Base");
+        base.entry_list = vec![];
+        let mut child = SequenceContainer::new("Child");
+        child.base_container = Some(BaseContainer {
+            container_ref: "Base".into(),
+            restriction_criteria: Some(RestrictionCriteria::BooleanExpression(expr)),
+        });
+
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("Base".into(), base);
+        tm.containers.insert("Child".into(), child);
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let base_cont = rt
+            .telemetry.as_ref().unwrap()
+            .containers.get("Child").unwrap()
+            .base_container.as_ref().unwrap();
+        assert!(matches!(
+            base_cont.restriction_criteria.as_ref().unwrap(),
+            RestrictionCriteria::BooleanExpression(BooleanExpression::And(_))
+        ));
+    }
+
+    #[test]
+    fn t5_boolean_expression_or_restriction_round_trip() {
+        use crate::model::container::{
+            BaseContainer, BooleanExpression, Comparison, ComparisonOperator,
+            RestrictionCriteria, SequenceContainer,
+        };
+
+        let make_cmp = |p: &str, v: &str| Comparison {
+            parameter_ref: p.into(),
+            value: v.into(),
+            comparison_operator: ComparisonOperator::Equality,
+            use_calibrated_value: true,
+        };
+        let expr = BooleanExpression::Or(vec![
+            BooleanExpression::Condition(make_cmp("TypeA", "1")),
+            BooleanExpression::Condition(make_cmp("TypeB", "2")),
+        ]);
+
+        let mut base = SequenceContainer::new("Base");
+        base.entry_list = vec![];
+        let mut child = SequenceContainer::new("Child");
+        child.base_container = Some(BaseContainer {
+            container_ref: "Base".into(),
+            restriction_criteria: Some(RestrictionCriteria::BooleanExpression(expr)),
+        });
+
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("Base".into(), base);
+        tm.containers.insert("Child".into(), child);
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let base_cont = rt
+            .telemetry.as_ref().unwrap()
+            .containers.get("Child").unwrap()
+            .base_container.as_ref().unwrap();
+        assert!(matches!(
+            base_cont.restriction_criteria.as_ref().unwrap(),
+            RestrictionCriteria::BooleanExpression(BooleanExpression::Or(_))
+        ));
+    }
+
+    // ── T5 extended: NextContainer restriction criteria ───────────────────────
+
+    #[test]
+    fn t5_next_container_restriction_round_trip() {
+        use crate::model::container::{BaseContainer, RestrictionCriteria, SequenceContainer};
+
+        let mut base = SequenceContainer::new("Base");
+        base.entry_list = vec![];
+        let mut child = SequenceContainer::new("Child");
+        child.base_container = Some(BaseContainer {
+            container_ref: "Base".into(),
+            restriction_criteria: Some(RestrictionCriteria::NextContainer {
+                container_ref: "Payload".into(),
+            }),
+        });
+
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("Base".into(), base);
+        tm.containers.insert("Child".into(), child);
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let base_cont = rt
+            .telemetry.as_ref().unwrap()
+            .containers.get("Child").unwrap()
+            .base_container.as_ref().unwrap();
+        assert!(matches!(
+            base_cont.restriction_criteria.as_ref().unwrap(),
+            RestrictionCriteria::NextContainer { container_ref }
+                if container_ref == "Payload"
+        ));
+    }
+
+    // ── T5 extended: entry variants with location and IncludeCondition ────────
+
+    #[test]
+    fn t5_parameter_ref_with_include_condition_round_trip() {
+        use crate::model::container::{
+            Comparison, ComparisonOperator, EntryLocation, MatchCriteria, ParameterRefEntry,
+            ReferenceLocation, SequenceContainer, SequenceEntry,
+        };
+
+        let entry = SequenceEntry::ParameterRef(ParameterRefEntry {
+            parameter_ref: "Val".into(),
+            location: Some(EntryLocation {
+                reference_location: ReferenceLocation::ContainerStart,
+                bit_offset: 16,
+            }),
+            include_condition: Some(MatchCriteria::Comparison(Comparison {
+                parameter_ref: "Flag".into(),
+                value: "1".into(),
+                comparison_operator: ComparisonOperator::Equality,
+                use_calibrated_value: true,
+            })),
+        });
+
+        let mut c = SequenceContainer::new("Pkt");
+        c.entry_list = vec![entry];
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("Pkt".into(), c);
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let rt_pkt = rt.telemetry.as_ref().unwrap().containers.get("Pkt").unwrap();
+        let SequenceEntry::ParameterRef(e) = &rt_pkt.entry_list[0] else {
+            panic!("expected ParameterRef")
+        };
+        let loc = e.location.as_ref().unwrap();
+        assert_eq!(loc.reference_location, ReferenceLocation::ContainerStart);
+        assert_eq!(loc.bit_offset, 16);
+        let MatchCriteria::Comparison(cmp) = e.include_condition.as_ref().unwrap() else {
+            panic!("expected Comparison IncludeCondition")
+        };
+        assert_eq!(cmp.parameter_ref, "Flag");
+    }
+
+    #[test]
+    fn t5_container_ref_with_include_condition_round_trip() {
+        use crate::model::container::{
+            Comparison, ComparisonOperator, ContainerRefEntry, EntryLocation, MatchCriteria,
+            ReferenceLocation, SequenceContainer, SequenceEntry,
+        };
+
+        let entry = SequenceEntry::ContainerRef(ContainerRefEntry {
+            container_ref: "Sub".into(),
+            location: Some(EntryLocation {
+                reference_location: ReferenceLocation::PreviousEntry,
+                bit_offset: 32,
+            }),
+            include_condition: Some(MatchCriteria::Comparison(Comparison {
+                parameter_ref: "Enable".into(),
+                value: "1".into(),
+                comparison_operator: ComparisonOperator::Equality,
+                use_calibrated_value: false,
+            })),
+        });
+
+        let mut c = SequenceContainer::new("Outer");
+        c.entry_list = vec![entry];
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("Outer".into(), c);
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let rt_outer = rt.telemetry.as_ref().unwrap().containers.get("Outer").unwrap();
+        let SequenceEntry::ContainerRef(e) = &rt_outer.entry_list[0] else {
+            panic!("expected ContainerRef")
+        };
+        assert_eq!(e.container_ref, "Sub");
+        assert_eq!(e.location.as_ref().unwrap().bit_offset, 32);
+        let MatchCriteria::Comparison(cmp) = e.include_condition.as_ref().unwrap() else {
+            panic!("expected Comparison IncludeCondition")
+        };
+        assert_eq!(cmp.parameter_ref, "Enable");
+        assert!(!cmp.use_calibrated_value);
+    }
+
+    #[test]
+    fn t5_fixed_value_entry_with_location_round_trip() {
+        use crate::model::container::{
+            EntryLocation, FixedValueEntry, ReferenceLocation, SequenceContainer, SequenceEntry,
+        };
+
+        let entry = SequenceEntry::FixedValue(FixedValueEntry {
+            size_in_bits: 8,
+            binary_value: Some("FF".into()),
+            location: Some(EntryLocation {
+                reference_location: ReferenceLocation::ContainerStart,
+                bit_offset: 0,
+            }),
+        });
+
+        let mut c = SequenceContainer::new("Pkt");
+        c.entry_list = vec![entry];
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("Pkt".into(), c);
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let rt_pkt = rt.telemetry.as_ref().unwrap().containers.get("Pkt").unwrap();
+        let SequenceEntry::FixedValue(fv) = &rt_pkt.entry_list[0] else {
+            panic!("expected FixedValue")
+        };
+        assert_eq!(fv.size_in_bits, 8);
+        assert_eq!(fv.binary_value.as_deref(), Some("FF"));
+        let loc = fv.location.as_ref().unwrap();
+        assert_eq!(loc.reference_location, ReferenceLocation::ContainerStart);
+        assert_eq!(loc.bit_offset, 0);
+    }
+
+    #[test]
+    fn t5_array_parameter_ref_with_location_round_trip() {
+        use crate::model::container::{
+            ArrayParameterRefEntry, EntryLocation, ReferenceLocation, SequenceContainer,
+            SequenceEntry,
+        };
+
+        let entry = SequenceEntry::ArrayParameterRef(ArrayParameterRefEntry {
+            parameter_ref: "Samples".into(),
+            location: Some(EntryLocation {
+                reference_location: ReferenceLocation::ContainerStart,
+                bit_offset: 64,
+            }),
+        });
+
+        let mut c = SequenceContainer::new("DataPkt");
+        c.entry_list = vec![entry];
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("DataPkt".into(), c);
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let rt_pkt = rt.telemetry.as_ref().unwrap().containers.get("DataPkt").unwrap();
+        let SequenceEntry::ArrayParameterRef(ar) = &rt_pkt.entry_list[0] else {
+            panic!("expected ArrayParameterRef")
+        };
+        assert_eq!(ar.parameter_ref, "Samples");
+        assert_eq!(ar.location.as_ref().unwrap().bit_offset, 64);
+    }
+
+    // ── T5 extended: MatchCriteria with ComparisonList and BooleanExpression ──
+
+    #[test]
+    fn t5_include_condition_comparison_list_round_trip() {
+        use crate::model::container::{
+            Comparison, ComparisonOperator, MatchCriteria, ParameterRefEntry, SequenceContainer,
+            SequenceEntry,
+        };
+
+        let list = vec![
+            Comparison {
+                parameter_ref: "FlagA".into(),
+                value: "1".into(),
+                comparison_operator: ComparisonOperator::Equality,
+                use_calibrated_value: true,
+            },
+            Comparison {
+                parameter_ref: "FlagB".into(),
+                value: "2".into(),
+                comparison_operator: ComparisonOperator::Inequality,
+                use_calibrated_value: false,
+            },
+        ];
+        let entry = SequenceEntry::ParameterRef(ParameterRefEntry {
+            parameter_ref: "Opt".into(),
+            location: None,
+            include_condition: Some(MatchCriteria::ComparisonList(list)),
+        });
+
+        let mut c = SequenceContainer::new("Pkt");
+        c.entry_list = vec![entry];
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("Pkt".into(), c);
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let rt_pkt = rt.telemetry.as_ref().unwrap().containers.get("Pkt").unwrap();
+        let SequenceEntry::ParameterRef(e) = &rt_pkt.entry_list[0] else {
+            panic!("expected ParameterRef")
+        };
+        let MatchCriteria::ComparisonList(cmps) = e.include_condition.as_ref().unwrap() else {
+            panic!("expected ComparisonList")
+        };
+        assert_eq!(cmps.len(), 2);
+        assert_eq!(cmps[0].parameter_ref, "FlagA");
+        assert_eq!(cmps[1].comparison_operator, ComparisonOperator::Inequality);
+    }
+
+    #[test]
+    fn t5_include_condition_boolean_expression_round_trip() {
+        use crate::model::container::{
+            BooleanExpression, Comparison, ComparisonOperator, MatchCriteria, ParameterRefEntry,
+            SequenceContainer, SequenceEntry,
+        };
+
+        let cond = BooleanExpression::Condition(Comparison {
+            parameter_ref: "Mode".into(),
+            value: "3".into(),
+            comparison_operator: ComparisonOperator::GreaterThan,
+            use_calibrated_value: true,
+        });
+        let entry = SequenceEntry::ParameterRef(ParameterRefEntry {
+            parameter_ref: "Ext".into(),
+            location: None,
+            include_condition: Some(MatchCriteria::BooleanExpression(cond)),
+        });
+
+        let mut c = SequenceContainer::new("Pkt");
+        c.entry_list = vec![entry];
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("Pkt".into(), c);
+        ss.telemetry = Some(tm);
+
+        let rt = round_trip(&ss);
+        let rt_pkt = rt.telemetry.as_ref().unwrap().containers.get("Pkt").unwrap();
+        let SequenceEntry::ParameterRef(e) = &rt_pkt.entry_list[0] else {
+            panic!("expected ParameterRef")
+        };
+        let MatchCriteria::BooleanExpression(BooleanExpression::Condition(cmp)) =
+            e.include_condition.as_ref().unwrap()
+        else {
+            panic!("expected BooleanExpression::Condition IncludeCondition")
+        };
+        assert_eq!(cmp.parameter_ref, "Mode");
+        assert_eq!(cmp.comparison_operator, ComparisonOperator::GreaterThan);
+    }
+
+    // ── T6 extended: CommandContainerSet serialization ────────────────────────
+
+    #[test]
+    fn t6_command_container_set_round_trip() {
+        use crate::model::command::CommandMetaData;
+        use crate::model::container::SequenceContainer;
+
+        let mut cc = SequenceContainer::new("SharedCmdPkt");
+        cc.short_description = Some("shared command packet".into());
+
+        let mut cmd = CommandMetaData::default();
+        cmd.command_containers.insert("SharedCmdPkt".into(), cc);
+
+        let mut ss = SpaceSystem::new("Test");
+        ss.command = Some(cmd);
+
+        let rt = round_trip(&ss);
+        let rt_cmd = rt.command.as_ref().unwrap();
+        assert_eq!(rt_cmd.command_containers.len(), 1);
+        let rt_cc = rt_cmd.command_containers.get("SharedCmdPkt").unwrap();
+        assert_eq!(rt_cc.name, "SharedCmdPkt");
+        assert_eq!(rt_cc.short_description.as_deref(), Some("shared command packet"));
+    }
+
+    // ── BooleanExpression::Not is silently skipped in serializer ─────────────
+
+    #[test]
+    fn t5_boolean_expression_not_silently_skipped() {
+        use crate::model::container::{
+            BaseContainer, BooleanExpression, Comparison, ComparisonOperator,
+            RestrictionCriteria, SequenceContainer,
+        };
+
+        let cmp = Comparison {
+            parameter_ref: "X".into(),
+            value: "1".into(),
+            comparison_operator: ComparisonOperator::Equality,
+            use_calibrated_value: true,
+        };
+        let not_expr =
+            BooleanExpression::Not(Box::new(BooleanExpression::Condition(cmp)));
+
+        let mut base = SequenceContainer::new("Base");
+        base.entry_list = vec![];
+        let mut child = SequenceContainer::new("Child");
+        child.base_container = Some(BaseContainer {
+            container_ref: "Base".into(),
+            restriction_criteria: Some(RestrictionCriteria::BooleanExpression(not_expr)),
+        });
+
+        let mut ss = SpaceSystem::new("Test");
+        let mut tm = crate::model::telemetry::TelemetryMetaData::default();
+        tm.containers.insert("Base".into(), base);
+        tm.containers.insert("Child".into(), child);
+        ss.telemetry = Some(tm);
+
+        // Not arm is intentionally a no-op in the serializer; must not panic.
+        let bytes = serialize(&ss).expect("serialize should not fail");
+        assert!(!bytes.is_empty());
     }
 }

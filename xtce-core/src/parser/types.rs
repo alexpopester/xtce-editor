@@ -18,7 +18,7 @@ use crate::model::telemetry::{
     TelemetryMetaData,
 };
 use crate::model::types::{
-    BinaryDataEncoding, BinarySize, ByteOrder, Calibrator, FloatDataEncoding, FloatEncoding,
+    Alias, BinaryDataEncoding, BinarySize, ByteOrder, Calibrator, FloatDataEncoding, FloatEncoding,
     FloatSizeInBits, IntegerDataEncoding, IntegerEncoding, PolynomialCalibrator, SplineCalibrator,
     SplinePoint, StringDataEncoding, StringEncoding, StringSize, Unit, ValueEnumeration,
 };
@@ -176,6 +176,32 @@ pub(super) fn parse_unit_set<R: BufRead>(
     Ok(units)
 }
 
+/// Parse an `<AliasSet>` element into a `Vec<Alias>`.
+///
+/// Each `<Alias nameSpace="…" alias="…"/>` child becomes one entry.
+pub(super) fn parse_alias_set<R: BufRead>(
+    ctx: &mut ParseContext<R>,
+) -> Result<Vec<Alias>, ParseError> {
+    let mut aliases = Vec::new();
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"Alias" => {
+                    let name_space = ctx.require_attr(&e, "nameSpace", "Alias")?.into_owned();
+                    let alias = ctx.require_attr(&e, "alias", "Alias")?.into_owned();
+                    ctx.skip_element(&e)?;
+                    aliases.push(Alias { name_space, alias });
+                }
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => return Err(ParseError::UnexpectedEof { expected: "</AliasSet>" }),
+            _ => {}
+        }
+    }
+    Ok(aliases)
+}
+
 /// Parse an `<Enumeration>` element inside `<EnumerationList>`.
 ///
 /// Reads all attributes, then drains to the closing End tag (required because
@@ -262,6 +288,7 @@ pub(super) fn parse_integer_parameter_type<R: BufRead>(
         ctx.require_attr(start, "name", "IntegerParameterType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.signed = ctx
         .get_attr(start, "signed")
         .map(|v| parse_bool("signed", &v))
@@ -276,6 +303,7 @@ pub(super) fn parse_integer_parameter_type<R: BufRead>(
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -298,11 +326,13 @@ pub(super) fn parse_float_parameter_type<R: BufRead>(
         ctx.require_attr(start, "name", "FloatParameterType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"FloatDataEncoding" => t.encoding = Some(parse_float_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -325,11 +355,13 @@ pub(super) fn parse_enumerated_parameter_type<R: BufRead>(
         ctx.require_attr(start, "name", "EnumeratedParameterType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
                 b"EnumerationList" => loop {
@@ -369,6 +401,7 @@ pub(super) fn parse_boolean_parameter_type<R: BufRead>(
         ctx.require_attr(start, "name", "BooleanParameterType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.one_string_value = ctx.get_attr_owned(start, "oneStringValue");
     t.zero_string_value = ctx.get_attr_owned(start, "zeroStringValue");
 
@@ -376,6 +409,7 @@ pub(super) fn parse_boolean_parameter_type<R: BufRead>(
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -398,11 +432,13 @@ pub(super) fn parse_string_parameter_type<R: BufRead>(
         ctx.require_attr(start, "name", "StringParameterType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"StringDataEncoding" => t.encoding = Some(parse_string_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -425,11 +461,13 @@ pub(super) fn parse_binary_parameter_type<R: BufRead>(
         ctx.require_attr(start, "name", "BinaryParameterType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"BinaryDataEncoding" => t.encoding = Some(parse_binary_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -453,11 +491,13 @@ pub(super) fn parse_aggregate_parameter_type<R: BufRead>(
         ctx.require_attr(start, "name", "AggregateParameterType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"MemberList" => loop {
                     match ctx.next()? {
                         Event::Start(e) => match e.local_name().as_ref() {
@@ -501,6 +541,7 @@ pub(super) fn parse_array_parameter_type<R: BufRead>(
         ctx.require_attr(start, "arrayTypeRef", "ArrayParameterType")?.into_owned();
     let mut t = ArrayParameterType::new(name, array_type_ref);
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.number_of_dimensions = ctx
         .get_attr(start, "numberOfDimensions")
         .map(|v| parse_u32("numberOfDimensions", &v))
@@ -575,6 +616,7 @@ pub(super) fn parse_integer_argument_type<R: BufRead>(
         ctx.require_attr(start, "name", "IntegerArgumentType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.signed = ctx
         .get_attr(start, "signed")
         .map(|v| parse_bool("signed", &v))
@@ -592,6 +634,7 @@ pub(super) fn parse_integer_argument_type<R: BufRead>(
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -614,6 +657,7 @@ pub(super) fn parse_float_argument_type<R: BufRead>(
         ctx.require_attr(start, "name", "FloatArgumentType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.size_in_bits = ctx
         .get_attr(start, "sizeInBits")
         .map(|v| parse_u32("sizeInBits", &v))
@@ -626,6 +670,7 @@ pub(super) fn parse_float_argument_type<R: BufRead>(
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"FloatDataEncoding" => t.encoding = Some(parse_float_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -648,11 +693,13 @@ pub(super) fn parse_enumerated_argument_type<R: BufRead>(
         ctx.require_attr(start, "name", "EnumeratedArgumentType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.initial_value = ctx.get_attr_owned(start, "initialValue");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
                 b"EnumerationList" => loop {
@@ -692,12 +739,14 @@ pub(super) fn parse_boolean_argument_type<R: BufRead>(
         ctx.require_attr(start, "name", "BooleanArgumentType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.one_string_value = ctx.get_attr_owned(start, "oneStringValue");
     t.zero_string_value = ctx.get_attr_owned(start, "zeroStringValue");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"IntegerDataEncoding" => t.encoding = Some(parse_integer_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -720,11 +769,13 @@ pub(super) fn parse_string_argument_type<R: BufRead>(
         ctx.require_attr(start, "name", "StringArgumentType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.initial_value = ctx.get_attr_owned(start, "initialValue");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"StringDataEncoding" => t.encoding = Some(parse_string_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -747,11 +798,13 @@ pub(super) fn parse_binary_argument_type<R: BufRead>(
         ctx.require_attr(start, "name", "BinaryArgumentType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.initial_value = ctx.get_attr_owned(start, "initialValue");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"BinaryDataEncoding" => t.encoding = Some(parse_binary_data_encoding(ctx, &e)?),
                 _ => ctx.skip_element(&e)?,
@@ -775,10 +828,12 @@ pub(super) fn parse_aggregate_argument_type<R: BufRead>(
         ctx.require_attr(start, "name", "AggregateArgumentType")?.as_ref(),
     );
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
 
     loop {
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
                 b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
                 b"MemberList" => loop {
                     match ctx.next()? {
@@ -827,6 +882,7 @@ pub(super) fn parse_array_argument_type<R: BufRead>(
         ctx.require_attr(start, "arrayTypeRef", "ArrayArgumentType")?.into_owned();
     let mut t = ArrayArgumentType::new(name, array_type_ref);
     t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
     t.number_of_dimensions = ctx
         .get_attr(start, "numberOfDimensions")
         .map(|v| parse_u32("numberOfDimensions", &v))

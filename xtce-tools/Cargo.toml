@@ -1,0 +1,12 @@
+[package]
+name = "xtce-tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "xtce-tools"
+path = "src/main.rs"
+
+[dependencies]
+xtce-core = { path = "../xtce-core" }
+clap = { version = "4", features = ["derive"] }

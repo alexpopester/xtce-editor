@@ -1298,6 +1298,364 @@ mod tests {
         assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
     }
 
+    // ── Unresolved baseType on ParameterType ─────────────────────────────────
+
+    #[test]
+    fn unresolved_base_type_on_parameter_type() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <IntegerParameterType name="DerivedInt" baseType="NoSuchBaseType"/>
+                </ParameterTypeSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchBaseType"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    // ── Unresolved baseType on ArgumentType ──────────────────────────────────
+
+    #[test]
+    fn unresolved_base_type_on_argument_type() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <CommandMetaData>
+                <ArgumentTypeSet>
+                  <IntegerArgumentType name="DerivedArg" baseType="NoSuchBase"/>
+                </ArgumentTypeSet>
+              </CommandMetaData>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchBase"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    // ── Unresolved member typeRef in AggregateArgumentType ───────────────────
+
+    #[test]
+    fn unresolved_aggregate_argument_member_type_ref() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <CommandMetaData>
+                <ArgumentTypeSet>
+                  <AggregateArgumentType name="Rec">
+                    <MemberList>
+                      <Member name="field1" typeRef="NoSuchArgType"/>
+                    </MemberList>
+                  </AggregateArgumentType>
+                </ArgumentTypeSet>
+              </CommandMetaData>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchArgType"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    // ── Unresolved arrayTypeRef in ArrayArgumentType ──────────────────────────
+
+    #[test]
+    fn unresolved_array_argument_type_ref() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <CommandMetaData>
+                <ArgumentTypeSet>
+                  <ArrayArgumentType name="Arr" arrayTypeRef="NoSuchElemType"/>
+                </ArgumentTypeSet>
+              </CommandMetaData>
+            </SpaceSystem>
+        "#);
+        assert_eq!(errors.len(), 1, "got {:?}", errors);
+        assert!(
+            matches!(&errors[0], ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchElemType"),
+            "got {:?}",
+            errors
+        );
+    }
+
+    // ── BooleanExpression restriction criteria ────────────────────────────────
+
+    #[test]
+    fn unresolved_boolean_expression_parameter_ref() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ContainerSet>
+                  <SequenceContainer name="Base">
+                    <EntryList/>
+                  </SequenceContainer>
+                  <SequenceContainer name="Child">
+                    <BaseContainer containerRef="Base">
+                      <RestrictionCriteria>
+                        <BooleanExpression>
+                          <ANDedConditions>
+                            <Condition parameterRef="NoSuchParam" value="1"/>
+                          </ANDedConditions>
+                        </BooleanExpression>
+                      </RestrictionCriteria>
+                    </BaseContainer>
+                    <EntryList/>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#);
+        assert!(
+            errors.iter().any(|e| matches!(e, ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchParam")),
+            "expected UnresolvedReference for NoSuchParam, got {:?}",
+            errors
+        );
+    }
+
+    // ── NextContainer restriction criteria ────────────────────────────────────
+
+    #[test]
+    fn unresolved_next_container_ref() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ContainerSet>
+                  <SequenceContainer name="Base">
+                    <EntryList/>
+                  </SequenceContainer>
+                  <SequenceContainer name="Child">
+                    <BaseContainer containerRef="Base">
+                      <RestrictionCriteria>
+                        <NextContainer containerRef="NoSuchContainer"/>
+                      </RestrictionCriteria>
+                    </BaseContainer>
+                    <EntryList/>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#);
+        assert!(
+            errors.iter().any(|e| matches!(e, ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchContainer")),
+            "expected UnresolvedReference for NoSuchContainer, got {:?}",
+            errors
+        );
+    }
+
+    // ── IncludeCondition on ParameterRefEntry ─────────────────────────────────
+
+    #[test]
+    fn unresolved_include_condition_parameter_ref() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ParameterTypeSet>
+                  <IntegerParameterType name="T">
+                    <IntegerDataEncoding sizeInBits="8"/>
+                  </IntegerParameterType>
+                </ParameterTypeSet>
+                <ParameterSet>
+                  <Parameter name="Val" parameterTypeRef="T"/>
+                </ParameterSet>
+                <ContainerSet>
+                  <SequenceContainer name="Pkt">
+                    <EntryList>
+                      <ParameterRefEntry parameterRef="Val">
+                        <IncludeCondition>
+                          <Comparison parameterRef="NoSuchFlag" value="1"/>
+                        </IncludeCondition>
+                      </ParameterRefEntry>
+                    </EntryList>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#);
+        assert!(
+            errors.iter().any(|e| matches!(e, ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchFlag")),
+            "expected UnresolvedReference for NoSuchFlag, got {:?}",
+            errors
+        );
+    }
+
+    // ── IncludeCondition on ContainerRefEntry ─────────────────────────────────
+
+    #[test]
+    fn unresolved_container_ref_include_condition() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ContainerSet>
+                  <SequenceContainer name="Sub">
+                    <EntryList/>
+                  </SequenceContainer>
+                  <SequenceContainer name="Pkt">
+                    <EntryList>
+                      <ContainerRefEntry containerRef="Sub">
+                        <IncludeCondition>
+                          <Comparison parameterRef="NoSuchParam" value="1"/>
+                        </IncludeCondition>
+                      </ContainerRefEntry>
+                    </EntryList>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#);
+        assert!(
+            errors.iter().any(|e| matches!(e, ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchParam")),
+            "expected UnresolvedReference for NoSuchParam, got {:?}",
+            errors
+        );
+    }
+
+    // ── ArrayParameterRef unresolved parameter ref ────────────────────────────
+
+    #[test]
+    fn unresolved_array_parameter_ref_entry() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ContainerSet>
+                  <SequenceContainer name="Pkt">
+                    <EntryList>
+                      <ArrayParameterRefEntry parameterRef="NoSuchArray"/>
+                    </EntryList>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#);
+        assert!(
+            errors.iter().any(|e| matches!(e, ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchArray")),
+            "expected UnresolvedReference for NoSuchArray, got {:?}",
+            errors
+        );
+    }
+
+    // ── MetaCommand CommandContainer base_container unresolved ────────────────
+
+    #[test]
+    fn unresolved_command_container_base() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <CommandMetaData>
+                <MetaCommandSet>
+                  <MetaCommand name="Cmd">
+                    <CommandContainer name="CmdPkt">
+                      <BaseContainer containerRef="NoSuchBase">
+                        <RestrictionCriteria>
+                          <Comparison parameterRef="X" value="1"/>
+                        </RestrictionCriteria>
+                      </BaseContainer>
+                      <EntryList/>
+                    </CommandContainer>
+                  </MetaCommand>
+                </MetaCommandSet>
+              </CommandMetaData>
+            </SpaceSystem>
+        "#);
+        assert!(
+            errors.iter().any(|e| matches!(e, ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchBase")),
+            "expected UnresolvedReference for NoSuchBase, got {:?}",
+            errors
+        );
+    }
+
+    // ── ComparisonList in RestrictionCriteria ─────────────────────────────────
+
+    #[test]
+    fn unresolved_comparison_list_restriction_criteria() {
+        let errors = parse_and_validate(r#"
+            <SpaceSystem name="Test">
+              <TelemetryMetaData>
+                <ContainerSet>
+                  <SequenceContainer name="Base">
+                    <EntryList/>
+                  </SequenceContainer>
+                  <SequenceContainer name="Child">
+                    <BaseContainer containerRef="Base">
+                      <RestrictionCriteria>
+                        <ComparisonList>
+                          <Comparison parameterRef="GoodParam" value="1"/>
+                          <Comparison parameterRef="NoSuchParam" value="2"/>
+                        </ComparisonList>
+                      </RestrictionCriteria>
+                    </BaseContainer>
+                    <EntryList/>
+                  </SequenceContainer>
+                </ContainerSet>
+              </TelemetryMetaData>
+            </SpaceSystem>
+        "#);
+        assert!(
+            errors.iter().any(|e| matches!(e, ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchParam")),
+            "expected UnresolvedReference for NoSuchParam, got {:?}",
+            errors
+        );
+    }
+
+    // ── BooleanExpression::Not is checked recursively ─────────────────────────
+
+    #[test]
+    fn boolean_expression_not_branch_checked() {
+        use crate::model::container::{
+            BooleanExpression, Comparison, ComparisonOperator, RestrictionCriteria, SequenceContainer,
+        };
+        use crate::model::telemetry::TelemetryMetaData;
+
+        let cmp = Comparison {
+            parameter_ref: "NoSuchParam".into(),
+            value: "1".into(),
+            comparison_operator: ComparisonOperator::Equality,
+            use_calibrated_value: true,
+        };
+        let not_expr = BooleanExpression::Not(Box::new(BooleanExpression::Condition(cmp)));
+
+        let mut inner = SequenceContainer::new("Base");
+        inner.entry_list = vec![];
+
+        let mut child = SequenceContainer::new("Child");
+        child.base_container = Some(crate::model::container::BaseContainer {
+            container_ref: "Base".into(),
+            restriction_criteria: Some(RestrictionCriteria::BooleanExpression(not_expr)),
+        });
+
+        let mut tm = TelemetryMetaData::default();
+        tm.containers.insert("Base".into(), inner);
+        tm.containers.insert("Child".into(), child);
+
+        let mut ss = crate::SpaceSystem::new("Test");
+        ss.telemetry = Some(tm);
+
+        let errors = validate(&ss);
+        assert!(
+            errors.iter().any(|e| matches!(e, ValidationError::UnresolvedReference { name, .. }
+                if name == "NoSuchParam")),
+            "expected UnresolvedReference for NoSuchParam via Not branch, got {:?}",
+            errors
+        );
+    }
+
     // ── Container namespace collision within same SpaceSystem ─────────────────
 
     #[test]

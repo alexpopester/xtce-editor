@@ -64,8 +64,14 @@ pub(super) fn parse_header<R: BufRead>(
                 b"AuthorSet" => loop {
                     match ctx.next()? {
                         Event::Start(e) => match e.local_name().as_ref() {
+                            // Legacy format: <AuthorInformation name="..." role="..."/>
                             b"AuthorInformation" => {
                                 header.author_set.push(parse_author_info(ctx, &e)?)
+                            }
+                            // Standard XTCE format: <Author>name (role)</Author>
+                            b"Author" => {
+                                let text = ctx.read_text_content()?;
+                                header.author_set.push(AuthorInfo { name: text, role: None });
                             }
                             _ => ctx.skip_element(&e)?,
                         },

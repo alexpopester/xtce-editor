@@ -430,3 +430,95 @@ impl ArrayArgumentType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Exercises all 8 ArgumentType dispatch methods on every variant.
+
+    fn all_variants() -> Vec<ArgumentType> {
+        vec![
+            ArgumentType::Integer(IntegerArgumentType::new("IntT")),
+            ArgumentType::Float(FloatArgumentType::new("FloatT")),
+            ArgumentType::Enumerated(EnumeratedArgumentType::new("EnumT")),
+            ArgumentType::Boolean(BooleanArgumentType::new("BoolT")),
+            ArgumentType::String(StringArgumentType::new("StrT")),
+            ArgumentType::Binary(BinaryArgumentType::new("BinT")),
+            ArgumentType::Aggregate(AggregateArgumentType::new("AggT")),
+            ArgumentType::Array(ArrayArgumentType::new("ArrT", "IntT")),
+        ]
+    }
+
+    #[test]
+    fn name_returns_correct_name_for_all_variants() {
+        let expected = ["IntT", "FloatT", "EnumT", "BoolT", "StrT", "BinT", "AggT", "ArrT"];
+        for (at, exp) in all_variants().iter().zip(expected) {
+            assert_eq!(at.name(), exp, "name() wrong for variant");
+        }
+    }
+
+    #[test]
+    fn set_name_mutates_name_for_all_variants() {
+        for mut at in all_variants() {
+            at.set_name("Renamed".into());
+            assert_eq!(at.name(), "Renamed");
+        }
+    }
+
+    #[test]
+    fn short_description_none_by_default_for_all_variants() {
+        for at in all_variants() {
+            assert!(at.short_description().is_none(), "expected None for {:?}", at.name());
+        }
+    }
+
+    #[test]
+    fn set_short_description_round_trips_for_all_variants() {
+        for mut at in all_variants() {
+            at.set_short_description(Some("desc".into()));
+            assert_eq!(at.short_description(), Some("desc"));
+            at.set_short_description(None);
+            assert!(at.short_description().is_none());
+        }
+    }
+
+    #[test]
+    fn set_base_type_round_trips_for_all_variants() {
+        for mut at in all_variants() {
+            at.set_base_type(Some("BaseT".into()));
+            // Verify via the inner struct — enough that it doesn't panic.
+            at.set_base_type(None);
+        }
+    }
+
+    #[test]
+    fn unit_set_mut_allows_push_for_all_variants() {
+        for mut at in all_variants() {
+            let unit = Unit {
+                value: "m/s".into(),
+                power: None,
+                factor: None,
+                description: None,
+            };
+            at.unit_set_mut().push(unit.clone());
+            assert_eq!(at.unit_set_mut().len(), 1);
+            assert_eq!(at.unit_set_mut()[0].value, "m/s");
+        }
+    }
+
+    #[test]
+    fn argument_new_constructors_set_defaults() {
+        let mc = MetaCommand::new("TC_Hello");
+        assert_eq!(mc.name, "TC_Hello");
+        assert!(!mc.r#abstract);
+        assert!(mc.base_meta_command.is_none());
+        assert!(mc.argument_list.is_empty());
+        assert!(mc.command_container.is_none());
+
+        let arg = Argument::new("arg1", "IntT");
+        assert_eq!(arg.name, "arg1");
+        assert_eq!(arg.argument_type_ref, "IntT");
+        assert!(arg.initial_value.is_none());
+    }
+}

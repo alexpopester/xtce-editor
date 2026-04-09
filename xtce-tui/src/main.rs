@@ -1,14 +1,12 @@
-mod app;
-mod event;
 mod tui;
-mod ui;
 
 use std::{env, path::PathBuf, process};
 
 use crossterm::event::{Event, KeyEventKind};
 
-use app::App;
-use event::Action;
+use xtce_tui::app::App;
+use xtce_tui::event::{self, Action};
+use xtce_tui::ui;
 
 fn main() {
     let path = env::args().nth(1).unwrap_or_else(|| {

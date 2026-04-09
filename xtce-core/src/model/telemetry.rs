@@ -442,3 +442,104 @@ impl ArrayParameterType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::types::Unit;
+
+    fn all_variants() -> Vec<ParameterType> {
+        vec![
+            ParameterType::Integer(IntegerParameterType::new("IntT")),
+            ParameterType::Float(FloatParameterType::new("FloatT")),
+            ParameterType::Enumerated(EnumeratedParameterType::new("EnumT")),
+            ParameterType::Boolean(BooleanParameterType::new("BoolT")),
+            ParameterType::String(StringParameterType::new("StrT")),
+            ParameterType::Binary(BinaryParameterType::new("BinT")),
+            ParameterType::Aggregate(AggregateParameterType::new("AggT")),
+            ParameterType::Array(ArrayParameterType::new("ArrT", "IntT")),
+        ]
+    }
+
+    #[test]
+    fn name_returns_correct_name_for_all_variants() {
+        let expected = ["IntT", "FloatT", "EnumT", "BoolT", "StrT", "BinT", "AggT", "ArrT"];
+        for (pt, exp) in all_variants().iter().zip(expected) {
+            assert_eq!(pt.name(), exp);
+        }
+    }
+
+    #[test]
+    fn set_name_mutates_name_for_all_variants() {
+        for mut pt in all_variants() {
+            pt.set_name("Renamed".into());
+            assert_eq!(pt.name(), "Renamed");
+        }
+    }
+
+    #[test]
+    fn short_description_none_by_default_for_all_variants() {
+        for pt in all_variants() {
+            assert!(pt.short_description().is_none());
+        }
+    }
+
+    #[test]
+    fn set_short_description_round_trips_for_all_variants() {
+        for mut pt in all_variants() {
+            pt.set_short_description(Some("desc".into()));
+            assert_eq!(pt.short_description(), Some("desc"));
+            pt.set_short_description(None);
+            assert!(pt.short_description().is_none());
+        }
+    }
+
+    #[test]
+    fn set_base_type_does_not_panic_for_all_variants() {
+        for mut pt in all_variants() {
+            pt.set_base_type(Some("Base".into()));
+            pt.set_base_type(None);
+        }
+    }
+
+    #[test]
+    fn unit_set_mut_allows_push_for_all_variants() {
+        for mut pt in all_variants() {
+            let unit = Unit { value: "Hz".into(), power: None, factor: None, description: None };
+            pt.unit_set_mut().push(unit);
+            assert_eq!(pt.unit_set_mut().len(), 1);
+        }
+    }
+
+    #[test]
+    fn parameter_new_sets_defaults() {
+        let p = Parameter::new("P1", "IntT");
+        assert_eq!(p.name, "P1");
+        assert_eq!(p.parameter_type_ref, "IntT");
+        assert!(p.short_description.is_none());
+        assert!(p.long_description.is_none());
+        assert!(p.alias_set.is_empty());
+        assert!(p.parameter_properties.is_none());
+    }
+
+    #[test]
+    fn data_source_variants_are_distinct() {
+        // Ensure all DataSource variants exist and are not equal to each other.
+        let sources = vec![
+            DataSource::Telemetered,
+            DataSource::Derived,
+            DataSource::Constant,
+            DataSource::Local,
+            DataSource::Ground,
+        ];
+        for i in 0..sources.len() {
+            for j in 0..sources.len() {
+                if i == j {
+                    assert_eq!(sources[i], sources[j]);
+                } else {
+                    assert_ne!(sources[i], sources[j]);
+                }
+            }
+        }
+    }
+}

@@ -7,3 +7,4 @@ edition = "2024"
 quick-xml = { version = "0.37", features = ["encoding"] }
 thiserror = "2"
 indexmap = "2"
+tempfile = "3"

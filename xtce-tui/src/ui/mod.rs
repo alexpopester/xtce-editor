@@ -53,7 +53,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         render_errors_overlay(app, frame);
     }
     if app.show_help {
-        render_help_overlay(frame);
+        render_help_overlay(app, frame);
     }
     if let Some(cs) = &app.create_state {
         match &cs.step {
@@ -442,7 +442,7 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         if let Some(err) = &app.save_error {
             spans.push(Span::styled(format!(" Save failed: {}  ", err), theme::error()));
         }
-        let err_count = app.validation_errors.len();
+        let err_count = app.validation_errors.len() + app.schema_errors.len();
         if err_count > 0 {
             spans.push(Span::styled(
                 format!(" {} error(s)  ", err_count),
@@ -455,12 +455,21 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
                 theme::warn(),
             ));
         }
-        let hint = if app.show_errors || app.show_help {
-            " Esc:Close  "
+        if app.show_errors || app.show_help {
+            spans.push(Span::styled(" ↑↓/jk:Scroll  Esc:Close ", theme::dim()));
         } else {
-            " q:Quit  Tab:Focus  ←→/hl:Expand  ↑↓/jk:Navigate  r:Reload  s/^W:Save  /:Search  a:Add  d:Del  A:AddEntry  x:RemLast  e:Errors  ?:Help "
-        };
-        spans.push(Span::styled(hint, theme::dim()));
+            spans.push(Span::styled(
+                " q:Quit  s:Save  u:Undo  ^R:Redo  /:Search  e:Errors  ?:Help ",
+                theme::dim(),
+            ));
+            if let Some(node) = app.tree.get(app.cursor) {
+                let ctx = node_context_hint(&node.node_id);
+                if !ctx.is_empty() {
+                    spans.push(Span::styled(" │ ", theme::dim()));
+                    spans.push(Span::styled(ctx, theme::key_desc()));
+                }
+            }
+        }
     }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -564,10 +573,11 @@ fn render_errors_overlay(app: &App, frame: &mut Frame) {
     let area = centered_rect(75, 70, frame.area());
     frame.render_widget(Clear, area);
 
-    let has_errors = !app.validation_errors.is_empty();
+    let total = app.validation_errors.len() + app.schema_errors.len();
+    let has_errors = total > 0;
     let border_color = if has_errors { Color::Red } else { theme::BORDER_FOCUSED };
     let title = if has_errors {
-        format!(" Validation Errors ({}) — e/Esc to close ", app.validation_errors.len())
+        format!(" Validation Errors ({total}) — e/Esc to close ")
     } else {
         " Validation Errors — e/Esc to close ".to_string()
     };
@@ -579,13 +589,21 @@ fn render_errors_overlay(app: &App, frame: &mut Frame) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let lines: Vec<Line<'static>> = if app.validation_errors.is_empty() {
+    let lines: Vec<Line<'static>> = if !has_errors {
         vec![Line::from(Span::styled("  No validation errors", theme::dim()))]
     } else {
-        app.validation_errors
-            .iter()
-            .flat_map(|e| error_lines(e))
-            .collect()
+        let mut out: Vec<Line<'static>> = Vec::new();
+        if !app.validation_errors.is_empty() {
+            out.push(Line::from(Span::styled("Semantic", theme::group_node())));
+            out.push(Line::from(""));
+            out.extend(app.validation_errors.iter().flat_map(|e| error_lines(e)));
+        }
+        if !app.schema_errors.is_empty() {
+            out.push(Line::from(Span::styled("Schema (XSD)", theme::group_node())));
+            out.push(Line::from(""));
+            out.extend(app.schema_errors.iter().flat_map(|e| error_lines(e)));
+        }
+        out
     };
 
     let content_height = lines.len();
@@ -632,16 +650,46 @@ fn error_lines(e: &ValidationError) -> Vec<Line<'static>> {
             ]),
             Line::from(""),
         ],
+        ValidationError::SchemaError(msg) => vec![
+            Line::from(vec![
+                Span::styled("  XSD:         ", theme::error()),
+                Span::styled(msg.clone(), theme::detail_value()),
+            ]),
+            Line::from(""),
+        ],
     }
 }
 
-fn render_help_overlay(frame: &mut Frame) {
+/// Return a compact hint string for the status bar based on the selected node type.
+fn node_context_hint(node_id: &NodeId) -> &'static str {
+    match node_id {
+        NodeId::SpaceSystem(_) =>
+            "i:Rename  C:Desc  a:AddChild  d:Del",
+        NodeId::TmSection(_) | NodeId::CmdSection(_) =>
+            "a:Add",
+        NodeId::TmParameterTypes(_) | NodeId::TmParameters(_) | NodeId::TmContainers(_)
+        | NodeId::CmdArgumentTypes(_) | NodeId::CmdMetaCommands(_) =>
+            "a:Add",
+        NodeId::TmParameterType(_, _) =>
+            "i:Rename  C:Desc  E:Enc  K:Cal  U:Units  b:BaseType  d:Del",
+        NodeId::TmParameter(_, _) =>
+            "i:Rename  C:Desc  t:TypeRef  D:DataSrc  P:ReadOnly  d:Del",
+        NodeId::TmContainer(_, _) =>
+            "i:Rename  C:Desc  b:Base  A:Entries  L:BitOff  R:Criteria  B:Abstract  d:Del",
+        NodeId::CmdArgumentType(_, _) =>
+            "i:Rename  C:Desc  E:Enc  K:Cal  U:Units  b:BaseType  d:Del",
+        NodeId::CmdMetaCommand(_, _) =>
+            "i:Rename  C:Desc  b:Base  g:AddArg  G:RemArg  A:Entries  d:Del",
+    }
+}
+
+fn render_help_overlay(app: &App, frame: &mut Frame) {
     let area = centered_rect(50, 75, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Keybindings — ?/Esc to close ")
+        .title(" Keybindings — ↑↓/jk:Scroll  ?/Esc:Close ")
         .border_style(Style::default().fg(theme::BORDER_FOCUSED));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -724,7 +772,12 @@ fn render_help_overlay(frame: &mut Frame) {
         })
         .collect();
 
-    frame.render_widget(Paragraph::new(lines), inner);
+    let content_height = lines.len();
+    let visible_height = inner.height as usize;
+    let scroll = app
+        .detail_scroll
+        .min(content_height.saturating_sub(visible_height));
+    frame.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), inner);
 }
 
 fn render_unit_review(units: &[xtce_core::model::types::Unit], frame: &mut Frame) {

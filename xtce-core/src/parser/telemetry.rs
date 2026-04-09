@@ -77,6 +77,7 @@ pub(super) fn parse_parameter<R: BufRead>(
         match ctx.next()? {
             Event::Start(e) => match e.local_name().as_ref() {
                 b"LongDescription" => p.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => p.alias_set = super::types::parse_alias_set(ctx)?,
                 b"ParameterProperties" => {
                     p.parameter_properties = Some(parse_parameter_properties(ctx, &e)?)
                 }

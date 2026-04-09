@@ -37,6 +37,9 @@ pub enum ValidationError {
 
     #[error("missing required field '{field}' on {element} '{name}'")]
     MissingRequiredField { field: &'static str, element: &'static str, name: String },
+
+    #[error("schema error: {0}")]
+    SchemaError(String),
 }
 
 #[derive(Debug, Error)]
