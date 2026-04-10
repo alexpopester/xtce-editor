@@ -303,6 +303,23 @@ pub enum Focus {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// AppMode
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The two top-level input modes.
+///
+/// - `Explore` is the default: navigation, search, error viewing, file ops.
+/// - `Edit` is entered with `m` and shows a context-sensitive mutation menu.
+///   All editing sub-flows (encoding wizard, create, etc.) are only reachable
+///   from Edit mode. `Esc` returns to Explore.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum AppMode {
+    #[default]
+    Explore,
+    Edit,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // App
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -348,6 +365,8 @@ pub struct App {
     /// All [`NodeId`]s (across the entire SpaceSystem, not just visible rows)
     /// whose label fuzzy-matches `search_query`.
     pub search_matches: Vec<NodeId>,
+    /// Same IDs as `search_matches` in a HashSet for O(1) highlight lookup during rendering.
+    pub search_matches_set: HashSet<NodeId>,
     /// Which element of `search_matches` is the "active" (jump-to) match.
     pub search_match_cursor: usize,
     /// True when the in-memory model differs from what is on disk.
@@ -388,6 +407,17 @@ pub struct App {
     /// Errors from the last XSD schema validation run (after save). Cleared
     /// when a new edit is made and re-populated after the next save.
     pub schema_errors: Vec<ValidationError>,
+    /// Visible height (in lines) of the error overlay, updated each render frame.
+    /// Used by `ensure_error_cursor_visible` so the cursor stays on-screen.
+    pub error_overlay_height: usize,
+    /// Visible height of the tree panel (in rows), updated each render frame.
+    /// Used by `jump_to` to center the view on the target.
+    pub tree_panel_height: usize,
+    /// Current top-level input mode: Explore (default) or Edit.
+    pub mode: AppMode,
+    /// Navigation history stack for reference following.
+    /// Each `GoToRef` pushes the departure node; `NavBack` pops and returns.
+    pub nav_stack: Vec<NodeId>,
 }
 
 impl App {
@@ -423,6 +453,7 @@ impl App {
             search_query: String::new(),
             search_index,
             search_matches: Vec::new(),
+            search_matches_set: HashSet::new(),
             search_match_cursor: 0,
             dirty: false,
             save_error: None,
@@ -442,6 +473,10 @@ impl App {
             undo_stack: VecDeque::new(),
             redo_stack: VecDeque::new(),
             schema_errors: Vec::new(),
+            error_overlay_height: 20,
+            tree_panel_height: 20,
+            mode: AppMode::Explore,
+            nav_stack: Vec::new(),
         }
     }
 
@@ -614,16 +649,29 @@ impl App {
                 }
                 Action::MoveUp => {
                     self.error_cursor = self.error_cursor.saturating_sub(1);
-                    self.error_scroll = self.error_scroll.saturating_sub(1);
+                    self.ensure_error_cursor_visible();
                 }
                 Action::MoveDown => {
                     if sem_len > 0 {
                         self.error_cursor = (self.error_cursor + 1).min(sem_len - 1);
                     }
-                    self.error_scroll += 1;
+                    self.ensure_error_cursor_visible();
                 }
-                Action::PageUp => self.error_scroll = self.error_scroll.saturating_sub(10),
-                Action::PageDown => self.error_scroll += 10,
+                Action::PageUp => {
+                    let page = self.error_overlay_height.saturating_sub(2).max(1);
+                    // Move cursor up by a page worth of entries (approximate)
+                    let step = (page / 3).max(1);
+                    self.error_cursor = self.error_cursor.saturating_sub(step);
+                    self.ensure_error_cursor_visible();
+                }
+                Action::PageDown => {
+                    if sem_len > 0 {
+                        let page = self.error_overlay_height.saturating_sub(2).max(1);
+                        let step = (page / 3).max(1);
+                        self.error_cursor = (self.error_cursor + step).min(sem_len - 1);
+                        self.ensure_error_cursor_visible();
+                    }
+                }
                 // Enter: jump to the selected error's location in the tree.
                 Action::ToggleExpand => {
                     if let Some(node_id) = self
@@ -675,27 +723,44 @@ impl App {
             Action::ToggleHelp => self.show_help = true,
             Action::CloseOverlay => {}
             Action::Quit => {}
+            Action::EnterEditMode => {
+                self.mode = AppMode::Edit;
+            }
+            Action::ExitEditMode => {
+                self.mode = AppMode::Explore;
+            }
+            Action::GoToRef => self.go_to_ref(),
+            Action::NavBack => self.nav_back(),
             Action::SearchStart => {
                 self.search_mode = true;
                 self.search_query.clear();
                 self.search_matches.clear();
+                self.search_matches_set.clear();
                 self.search_match_cursor = 0;
             }
+            // While typing, only update the query string — no search yet.
             Action::SearchChar(c) => {
                 self.search_query.push(c);
-                self.search_match_cursor = 0;
-                self.recompute_search();
-                if let Some(target) = self.search_matches.first().cloned() {
-                    self.jump_to(target);
-                }
             }
             Action::SearchBackspace => {
                 self.search_query.pop();
+            }
+            // Enter: run the search, jump to first result, exit search mode.
+            Action::SearchCommit => {
                 self.search_match_cursor = 0;
                 self.recompute_search();
+                self.search_mode = false;
                 if let Some(target) = self.search_matches.first().cloned() {
                     self.jump_to(target);
                 }
+            }
+            // Esc: cancel and clear everything.
+            Action::SearchCancel => {
+                self.search_mode = false;
+                self.search_query.clear();
+                self.search_matches.clear();
+                self.search_matches_set.clear();
+                self.search_match_cursor = 0;
             }
             Action::SearchNext => {
                 if !self.search_matches.is_empty() {
@@ -763,6 +828,158 @@ impl App {
             Action::UnitEditConfirm | Action::UnitEditChar(_)
             | Action::UnitEditBackspace | Action::UnitEditCancel => {}
         }
+    }
+
+    // ── Reference navigation ──────────────────────────────────────────────────
+
+    /// Follow the reference of the currently selected node.
+    ///
+    /// Resolves the primary outbound reference of the current node (type ref for
+    /// a Parameter, base container for a SequenceContainer, base MetaCommand for
+    /// a MetaCommand, etc.) and jumps to it. The departure node is pushed onto
+    /// `nav_stack` so the user can return with `NavBack`.
+    pub fn go_to_ref(&mut self) {
+        let current_id = self.tree.get(self.cursor).map(|n| n.node_id.clone());
+        let Some(current_id) = current_id else { return };
+        let target = self.resolve_ref_for(&current_id);
+        if let Some(target_id) = target {
+            self.nav_stack.push(current_id);
+            self.jump_to(target_id);
+        }
+    }
+
+    /// Pop the nav stack and jump back to the previous location.
+    pub fn nav_back(&mut self) {
+        if let Some(prev) = self.nav_stack.pop() {
+            self.jump_to(prev);
+        }
+    }
+
+    /// Resolve the primary outbound reference for a node.
+    fn resolve_ref_for(&self, node_id: &NodeId) -> Option<NodeId> {
+        use crate::ui::tree::get_ss;
+        match node_id {
+            // Parameter → its ParameterType
+            NodeId::TmParameter(path, name) => {
+                let ss = get_ss(&self.space_system, path)?;
+                let tm = ss.telemetry.as_ref()?;
+                let param = tm.parameters.get(name)?;
+                self.resolve_param_type(path, &param.parameter_type_ref)
+            }
+            // ParameterType → first parameter in the same SS that uses it
+            NodeId::TmParameterType(path, name) => {
+                let ss = get_ss(&self.space_system, path)?;
+                let tm = ss.telemetry.as_ref()?;
+                for (pname, param) in &tm.parameters {
+                    if &param.parameter_type_ref == name {
+                        return Some(NodeId::TmParameter(path.clone(), pname.clone()));
+                    }
+                }
+                None
+            }
+            // SequenceContainer → its base container
+            NodeId::TmContainer(path, name) => {
+                let ss = get_ss(&self.space_system, path)?;
+                let tm = ss.telemetry.as_ref()?;
+                let container = tm.containers.get(name)?;
+                let cref = container.base_container.as_ref()?.container_ref.clone();
+                self.resolve_container_anywhere(&cref)
+            }
+            // MetaCommand → its base MetaCommand
+            NodeId::CmdMetaCommand(path, name) => {
+                let ss = get_ss(&self.space_system, path)?;
+                let cmd = ss.command.as_ref()?;
+                let mc = cmd.meta_commands.get(name)?;
+                let base_name = mc.base_meta_command.as_ref()?;
+                // Look in the same SS first, then search the whole tree
+                if cmd.meta_commands.contains_key(base_name.as_str()) {
+                    Some(NodeId::CmdMetaCommand(path.clone(), base_name.clone()))
+                } else {
+                    self.find_meta_command_in_tree(&self.space_system, base_name, &[])
+                }
+            }
+            // ArgumentType → first MetaCommand in the same SS whose argument uses it
+            NodeId::CmdArgumentType(path, name) => {
+                let ss = get_ss(&self.space_system, path)?;
+                let cmd = ss.command.as_ref()?;
+                for (mcname, mc) in &cmd.meta_commands {
+                    for arg in &mc.argument_list {
+                        if &arg.argument_type_ref == name {
+                            return Some(NodeId::CmdMetaCommand(path.clone(), mcname.clone()));
+                        }
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Find a ParameterType by `type_ref` starting in `path` and walking up to root.
+    fn resolve_param_type(&self, path: &[String], type_ref: &str) -> Option<NodeId> {
+        use crate::ui::tree::get_ss;
+        let mut search: Vec<String> = path.to_vec();
+        loop {
+            if let Some(ss) = get_ss(&self.space_system, &search) {
+                if let Some(tm) = &ss.telemetry {
+                    if tm.parameter_types.contains_key(type_ref) {
+                        return Some(NodeId::TmParameterType(search, type_ref.to_string()));
+                    }
+                }
+            }
+            if search.is_empty() {
+                break;
+            }
+            search.pop();
+        }
+        None
+    }
+
+    /// Find a SequenceContainer or CommandContainer by name anywhere in the tree.
+    fn resolve_container_anywhere(&self, cref: &str) -> Option<NodeId> {
+        self.find_container_in_tree(&self.space_system, cref, &[])
+    }
+
+    fn find_container_in_tree(
+        &self,
+        ss: &xtce_core::SpaceSystem,
+        cref: &str,
+        path: &[String],
+    ) -> Option<NodeId> {
+        if let Some(tm) = &ss.telemetry {
+            if tm.containers.contains_key(cref) {
+                return Some(NodeId::TmContainer(path.to_vec(), cref.to_string()));
+            }
+        }
+        for sub in &ss.sub_systems {
+            let mut sub_path = path.to_vec();
+            sub_path.push(sub.name.clone());
+            if let Some(found) = self.find_container_in_tree(sub, cref, &sub_path) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    fn find_meta_command_in_tree(
+        &self,
+        ss: &xtce_core::SpaceSystem,
+        name: &str,
+        path: &[String],
+    ) -> Option<NodeId> {
+        if let Some(cmd) = &ss.command {
+            if cmd.meta_commands.contains_key(name) {
+                return Some(NodeId::CmdMetaCommand(path.to_vec(), name.to_string()));
+            }
+        }
+        for sub in &ss.sub_systems {
+            let mut sub_path = path.to_vec();
+            sub_path.push(sub.name.clone());
+            if let Some(found) = self.find_meta_command_in_tree(sub, name, &sub_path) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -934,7 +1151,7 @@ impl App {
     }
 
     /// Expand all ancestors of `target`, rebuild the tree, then move the cursor
-    /// to the target row.
+    /// to the target row, centering the view.
     pub fn jump_to(&mut self, target: NodeId) {
         for id in ancestors_to_expand(&target) {
             self.expanded.insert(id);
@@ -944,7 +1161,48 @@ impl App {
             self.cursor = idx;
             self.list_state.select(Some(idx));
             self.detail_scroll = 0;
+            // Center the view: ratatui's ListState scroll is managed by the widget,
+            // but we can nudge it by offsetting around the cursor.
+            // Store last known height and use it; 20 is a safe fallback.
+            let half = self.tree_panel_height / 2;
+            let offset = idx.saturating_sub(half);
+            *self.list_state.offset_mut() = offset;
         }
+    }
+
+    /// Adjust `error_scroll` so that the currently selected error is visible.
+    ///
+    /// The error overlay header occupies 2 fixed lines (group heading + blank).
+    /// Each error starts at offset 2 + sum of prior error line counts.
+    fn ensure_error_cursor_visible(&mut self) {
+        if self.validation_errors.is_empty() {
+            return;
+        }
+        let cursor_line = self.error_cursor_start_line();
+        let visible = self.error_overlay_height.max(4);
+        // Scroll up so cursor is visible at the top
+        if cursor_line < self.error_scroll {
+            self.error_scroll = cursor_line;
+        }
+        // Scroll down so cursor is visible (leave 2 lines for the error body)
+        let error_lines = self
+            .validation_errors
+            .get(self.error_cursor)
+            .map(|e| e.render_line_count())
+            .unwrap_or(2);
+        if cursor_line + error_lines > self.error_scroll + visible {
+            self.error_scroll = cursor_line + error_lines - visible;
+        }
+    }
+
+    /// Returns the line index (0-based) at which error `error_cursor` starts
+    /// within the rendered error overlay content.
+    fn error_cursor_start_line(&self) -> usize {
+        const HEADER: usize = 2; // group heading + blank line
+        HEADER + self.validation_errors[..self.error_cursor]
+            .iter()
+            .map(|e| e.render_line_count())
+            .sum::<usize>()
     }
 
     /// Recompute `search_matches` by fuzzy-matching the pre-built `search_index`.
@@ -956,6 +1214,7 @@ impl App {
     /// the result vec.
     pub fn recompute_search(&mut self) {
         self.search_matches.clear();
+        self.search_matches_set.clear();
         if self.search_query.is_empty() {
             return;
         }
@@ -971,6 +1230,9 @@ impl App {
             .collect();
         scored.sort_by(|a, b| b.0.cmp(&a.0));
         self.search_matches = scored.into_iter().map(|(_, id)| id).collect();
+
+        // Build O(1) lookup set for rendering.
+        self.search_matches_set = self.search_matches.iter().cloned().collect();
 
         // Clamp cursor without resetting it so position is preserved on rebuild.
         if !self.search_matches.is_empty() {
@@ -2713,7 +2975,7 @@ impl App {
             NodeId::TmParameterType(path, name) => get_ss(&self.space_system, path)
                 .and_then(|ss| ss.telemetry.as_ref())
                 .and_then(|tm| tm.parameter_types.get(name.as_str()))
-                .map(|pt| !matches!(pt, ParameterType::Aggregate(_) | ParameterType::Array(_)))
+                .map(|pt| !matches!(pt, ParameterType::Aggregate(_) | ParameterType::Array(_) | ParameterType::AbsoluteTime(_) | ParameterType::RelativeTime(_)))
                 .unwrap_or(false),
             NodeId::CmdArgumentType(path, name) => get_ss(&self.space_system, path)
                 .and_then(|ss| ss.command.as_ref())
@@ -3014,14 +3276,16 @@ impl App {
                     .and_then(|ss| ss.telemetry.as_ref())
                     .and_then(|tm| tm.parameter_types.get(name.as_str()))
                     .map(|pt| match pt {
-                        ParameterType::Integer(t) => t.unit_set.clone(),
-                        ParameterType::Float(t) => t.unit_set.clone(),
-                        ParameterType::Enumerated(t) => t.unit_set.clone(),
-                        ParameterType::Boolean(t) => t.unit_set.clone(),
-                        ParameterType::String(t) => t.unit_set.clone(),
-                        ParameterType::Binary(t) => t.unit_set.clone(),
-                        ParameterType::Aggregate(t) => t.unit_set.clone(),
-                        ParameterType::Array(t) => t.unit_set.clone(),
+                        ParameterType::Integer(t)      => t.unit_set.clone(),
+                        ParameterType::Float(t)        => t.unit_set.clone(),
+                        ParameterType::Enumerated(t)   => t.unit_set.clone(),
+                        ParameterType::Boolean(t)      => t.unit_set.clone(),
+                        ParameterType::String(t)       => t.unit_set.clone(),
+                        ParameterType::Binary(t)       => t.unit_set.clone(),
+                        ParameterType::Aggregate(t)    => t.unit_set.clone(),
+                        ParameterType::Array(t)        => t.unit_set.clone(),
+                        ParameterType::AbsoluteTime(t) => t.unit_set.clone(),
+                        ParameterType::RelativeTime(t) => t.unit_set.clone(),
                     })
             }
             NodeId::CmdArgumentType(path, name) => {
@@ -3577,7 +3841,6 @@ fn error_location_to_node_id(e: &ValidationError) -> Option<NodeId> {
     let loc = match e {
         ValidationError::UnresolvedReference { location, .. } => location.as_ref()?,
         ValidationError::CyclicInheritance { location, .. } => location.as_ref()?,
-        ValidationError::SelfReferentialInheritance { location, .. } => location.as_ref()?,
         _ => return None,
     };
     Some(location_to_node_id(loc))
@@ -3641,14 +3904,16 @@ fn fuzzy_score(query: &[char], text: &str) -> Option<i32> {
 fn parameter_type_variant_label(pt: &xtce_core::model::telemetry::ParameterType) -> &'static str {
     use xtce_core::model::telemetry::ParameterType;
     match pt {
-        ParameterType::Integer(_)    => "Integer",
-        ParameterType::Float(_)      => "Float",
-        ParameterType::Enumerated(_) => "Enumerated",
-        ParameterType::Boolean(_)    => "Boolean",
-        ParameterType::String(_)     => "String",
-        ParameterType::Binary(_)     => "Binary",
-        ParameterType::Aggregate(_)  => "Aggregate",
-        ParameterType::Array(_)      => "Array",
+        ParameterType::Integer(_)      => "Integer",
+        ParameterType::Float(_)        => "Float",
+        ParameterType::Enumerated(_)   => "Enumerated",
+        ParameterType::Boolean(_)      => "Boolean",
+        ParameterType::String(_)       => "String",
+        ParameterType::Binary(_)       => "Binary",
+        ParameterType::Aggregate(_)    => "Aggregate",
+        ParameterType::Array(_)        => "Array",
+        ParameterType::AbsoluteTime(_) => "AbsoluteTime",
+        ParameterType::RelativeTime(_) => "RelativeTime",
     }
 }
 

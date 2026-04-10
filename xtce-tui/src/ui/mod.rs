@@ -20,9 +20,9 @@ use ratatui::{
 use xtce_core::ValidationError;
 
 use crate::app::{
-    App, CalibratorStep, CreateStep, EntryAddStep, EntryLocationStep, Focus, RestrictionEditStep,
-    TypeVariant, UnitEditStep, CALIBRATOR_KIND_LABELS, RESTRICTION_OPERATOR_LABELS,
-    integer_encoding_labels, float_size_labels,
+    App, AppMode, CalibratorStep, CreateStep, EntryAddStep, EntryLocationStep, Focus,
+    RestrictionEditStep, TypeVariant, UnitEditStep, CALIBRATOR_KIND_LABELS,
+    RESTRICTION_OPERATOR_LABELS, integer_encoding_labels, float_size_labels,
 };
 use crate::event::EditField;
 
@@ -54,6 +54,23 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     }
     if app.show_help {
         render_help_overlay(app, frame);
+    }
+    // Edit mode overlay — shown while in Edit mode (and no other modal is open)
+    if app.mode == AppMode::Edit
+        && app.picker_state.is_none()
+        && app.encoding_state.is_none()
+        && app.create_state.is_none()
+        && app.entry_add_state.is_none()
+        && app.delete_confirm.is_none()
+        && !app.reload_confirm
+        && app.edit_state.is_none()
+        && app.restriction_edit_state.is_none()
+        && app.entry_location_state.is_none()
+        && app.calibrator_state.is_none()
+        && app.unit_edit_state.is_none()
+        && app.enum_entry_state.is_none()
+    {
+        render_edit_mode_overlay(app, frame);
     }
     if let Some(cs) = &app.create_state {
         match &cs.step {
@@ -194,7 +211,7 @@ fn render_tree(app: &mut App, frame: &mut Frame, area: Rect) {
             // Search match overrides the normal label colour.
             let label_style = if current_match_id == Some(&node.node_id) {
                 theme::search_current_match()
-            } else if app.search_matches.contains(&node.node_id) {
+            } else if app.search_matches_set.contains(&node.node_id) {
                 theme::search_match()
             } else {
                 match &node.node_id {
@@ -226,6 +243,9 @@ fn render_tree(app: &mut App, frame: &mut Frame, area: Rect) {
     } else {
         theme::selected_unfocused()
     };
+
+    // Record visible height for jump_to centering.
+    app.tree_panel_height = inner.height as usize;
 
     let list = List::new(items).highlight_style(highlight_style);
     frame.render_stateful_widget(list, inner, &mut app.list_state);
@@ -457,18 +477,22 @@ fn render_status(app: &App, frame: &mut Frame, area: Rect) {
         }
         if app.show_errors || app.show_help {
             spans.push(Span::styled(" ↑↓/jk:Scroll  Esc:Close ", theme::dim()));
-        } else {
-            spans.push(Span::styled(
-                " q:Quit  s:Save  u:Undo  ^R:Redo  /:Search  e:Errors  ?:Help ",
-                theme::dim(),
-            ));
+        } else if app.mode == AppMode::Edit {
+            // Edit mode: show mode indicator + available mutations for current node
+            spans.push(Span::styled(" [EDIT] ", theme::section_header()));
+            spans.push(Span::styled(" Esc:Back  ", theme::dim()));
             if let Some(node) = app.tree.get(app.cursor) {
                 let ctx = node_context_hint(&node.node_id);
                 if !ctx.is_empty() {
-                    spans.push(Span::styled(" │ ", theme::dim()));
                     spans.push(Span::styled(ctx, theme::key_desc()));
                 }
             }
+        } else {
+            // Explore mode: show base navigation hints
+            spans.push(Span::styled(
+                " q:Quit  s:Save  u:Undo  ^R:Redo  /:Search  f:FollowRef  [:Back  e:Errors  m:Edit  ?:Help ",
+                theme::dim(),
+            ));
         }
     }
 
@@ -569,7 +593,7 @@ fn render_picker_overlay(
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
-fn render_errors_overlay(app: &App, frame: &mut Frame) {
+fn render_errors_overlay(app: &mut App, frame: &mut Frame) {
     let area = centered_rect(75, 70, frame.area());
     frame.render_widget(Clear, area);
 
@@ -579,7 +603,7 @@ fn render_errors_overlay(app: &App, frame: &mut Frame) {
     let has_errors = total > 0;
     let border_color = if has_errors { Color::Red } else { theme::BORDER_FOCUSED };
     let title = if has_errors {
-        format!(" Validation Errors ({total}) — j/k:scroll  s:fold-semantic  x:fold-schema  e/Esc:close ")
+        format!(" Validation Errors ({total}) — j/k:select  Ctrl-u/d:page  Enter:jump  e/Esc:close ")
     } else {
         " Validation Errors — e/Esc to close ".to_string()
     };
@@ -591,6 +615,10 @@ fn render_errors_overlay(app: &App, frame: &mut Frame) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let visible_height = inner.height as usize;
+    // Update app so cursor-visibility math in apply_action uses the real height.
+    app.error_overlay_height = visible_height;
+
     let lines: Vec<Line<'static>> = if !has_errors {
         vec![Line::from(Span::styled("  No validation errors", theme::dim()))]
     } else {
@@ -601,13 +629,31 @@ fn render_errors_overlay(app: &App, frame: &mut Frame) {
             out.push(Line::from(vec![
                 Span::styled(format!("{fold_indicator} Semantic"), theme::group_node()),
                 Span::styled(format!(" ({sem_count})"), theme::dim()),
-                Span::styled("  [s:fold  j/k:select  Enter:jump]", theme::dim()),
+                Span::styled("  [s:fold]", theme::dim()),
             ]));
             if !app.error_fold_semantic {
                 out.push(Line::from(""));
+
+                // Virtual scroll: compute which errors are in the visible window.
+                // Header = 2 lines (group line + blank). Only fully style errors
+                // whose lines overlap [scroll, scroll+visible_height). All others
+                // are emitted as cheap blank lines to preserve scroll offsets.
+                const HEADER: usize = 2;
+                let scroll = app.error_scroll;
+                let vis_end = scroll + visible_height;
+
+                let mut line_cursor = HEADER;
                 for (i, e) in app.validation_errors.iter().enumerate() {
-                    let selected = i == app.error_cursor;
-                    out.extend(error_lines_with_cursor(e, selected));
+                    let lc = e.render_line_count();
+                    let in_window = (line_cursor + lc > scroll) && (line_cursor < vis_end);
+                    if in_window {
+                        out.extend(error_lines_with_cursor(e, i == app.error_cursor));
+                    } else {
+                        for _ in 0..lc {
+                            out.push(Line::from(""));
+                        }
+                    }
+                    line_cursor += lc;
                 }
             }
             out.push(Line::from(""));
@@ -629,7 +675,6 @@ fn render_errors_overlay(app: &App, frame: &mut Frame) {
     };
 
     let content_height = lines.len();
-    let visible_height = inner.height as usize;
     let scroll = app
         .error_scroll
         .min(content_height.saturating_sub(visible_height));
@@ -690,14 +735,6 @@ fn error_lines(e: &ValidationError) -> Vec<Line<'static>> {
             ]),
             Line::from(""),
         ],
-        ValidationError::SelfReferentialInheritance { name, .. } => vec![
-            Line::from(vec![
-                Span::styled("  Self-ref:    ", theme::error()),
-                Span::styled(name.clone(), theme::detail_value()),
-                Span::styled(" inherits from itself".to_string(), theme::dim()),
-            ]),
-            Line::from(""),
-        ],
         ValidationError::SchemaError(msg) => vec![
             Line::from(vec![
                 Span::styled("  XSD:         ", theme::error()),
@@ -719,16 +756,107 @@ fn node_context_hint(node_id: &NodeId) -> &'static str {
         | NodeId::CmdArgumentTypes(_) | NodeId::CmdMetaCommands(_) =>
             "a:Add",
         NodeId::TmParameterType(_, _) =>
-            "i:Rename  C:Desc  E:Enc  K:Cal  U:Units  b:BaseType  d:Del",
+            "f:UsedBy  i:Rename  C:Desc  E:Enc  K:Cal  U:Units  b:BaseType  d:Del",
         NodeId::TmParameter(_, _) =>
-            "i:Rename  C:Desc  t:TypeRef  D:DataSrc  P:ReadOnly  d:Del",
+            "f:GoToType  i:Rename  C:Desc  t:TypeRef  D:DataSrc  P:ReadOnly  d:Del",
         NodeId::TmContainer(_, _) =>
-            "i:Rename  C:Desc  b:Base  A:Entries  L:BitOff  R:Criteria  B:Abstract  d:Del",
+            "f:GoToBase  i:Rename  C:Desc  b:Base  A:Entries  L:BitOff  R:Criteria  B:Abstract  d:Del",
         NodeId::CmdArgumentType(_, _) =>
-            "i:Rename  C:Desc  E:Enc  K:Cal  U:Units  b:BaseType  d:Del",
+            "f:UsedBy  i:Rename  C:Desc  E:Enc  K:Cal  U:Units  b:BaseType  d:Del",
         NodeId::CmdMetaCommand(_, _) =>
-            "i:Rename  C:Desc  b:Base  g:AddArg  G:RemArg  A:Entries  d:Del",
+            "f:GoToBase  i:Rename  C:Desc  b:Base  g:AddArg  G:RemArg  A:Entries  d:Del",
     }
+}
+
+fn render_edit_mode_overlay(app: &App, frame: &mut Frame) {
+    // Small floating panel anchored to the bottom-right of the tree panel.
+    let full = frame.area();
+    // Position: right half, roughly 35% wide, near the top.
+    let w = (full.width / 3).max(32).min(full.width.saturating_sub(2));
+    let h = 20u16.min(full.height.saturating_sub(4));
+    let x = full.width.saturating_sub(w + 1);
+    let y = 1u16; // just below the title bar
+    let area = ratatui::layout::Rect::new(x, y, w, h);
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Edit Mode — Esc: back to Explore ")
+        .border_style(Style::default().fg(theme::BORDER_FOCUSED));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Build a context-sensitive list of available edits for the selected node.
+    let actions: &[(&str, &str)] = if let Some(node) = app.tree.get(app.cursor) {
+        match &node.node_id {
+            NodeId::SpaceSystem(_) => &[
+                ("i", "Rename"),
+                ("C", "Edit description"),
+                ("a", "Add child SpaceSystem / item"),
+                ("d", "Delete"),
+            ],
+            NodeId::TmParameterType(_, _) | NodeId::CmdArgumentType(_, _) => &[
+                ("i", "Rename"),
+                ("C", "Edit description"),
+                ("b", "Set base type"),
+                ("E", "Edit encoding"),
+                ("K", "Edit calibrator"),
+                ("U", "Edit unit set"),
+                ("d", "Delete"),
+            ],
+            NodeId::TmParameter(_, _) => &[
+                ("i", "Rename"),
+                ("C", "Edit description"),
+                ("t", "Change type reference"),
+                ("D", "Cycle data source"),
+                ("P", "Toggle read-only"),
+                ("d", "Delete"),
+            ],
+            NodeId::TmContainer(_, _) => &[
+                ("i", "Rename"),
+                ("C", "Edit description"),
+                ("b", "Set base container"),
+                ("A", "Add entry"),
+                ("x", "Remove last entry"),
+                ("L", "Set entry bit offset"),
+                ("R", "Edit restriction criteria"),
+                ("B", "Toggle abstract"),
+                ("d", "Delete"),
+            ],
+            NodeId::CmdMetaCommand(_, _) => &[
+                ("i", "Rename"),
+                ("C", "Edit description"),
+                ("b", "Set base MetaCommand"),
+                ("A", "Add entry"),
+                ("x", "Remove last entry"),
+                ("g", "Add argument"),
+                ("G", "Remove last argument"),
+                ("B", "Toggle abstract"),
+                ("d", "Delete"),
+            ],
+            NodeId::TmSection(_) | NodeId::CmdSection(_)
+            | NodeId::TmParameterTypes(_) | NodeId::TmParameters(_)
+            | NodeId::TmContainers(_) | NodeId::CmdArgumentTypes(_)
+            | NodeId::CmdMetaCommands(_) => &[
+                ("a", "Add item"),
+            ],
+        }
+    } else {
+        &[]
+    };
+
+    let lines: Vec<Line<'static>> = if actions.is_empty() {
+        vec![Line::from(Span::styled("  (nothing editable here)", theme::dim()))]
+    } else {
+        actions.iter().map(|(key, desc)| {
+            Line::from(vec![
+                Span::styled(format!("  {:<4}", key), theme::key_name()),
+                Span::styled(desc.to_string(), theme::key_desc()),
+            ])
+        }).collect()
+    };
+
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_help_overlay(app: &App, frame: &mut Frame) {
@@ -757,35 +885,39 @@ fn render_help_overlay(app: &App, frame: &mut Frame) {
         ("Panels", ""),
         ("  Tab", "Cycle focus"),
         ("", ""),
-        ("Edit (tree focus)", ""),
-        ("  i", "Rename selected item"),
-        ("  C", "Edit description"),
+        ("Modes", ""),
+        ("  m", "Enter Edit mode (mutation menu)"),
+        ("  Esc (in Edit)", "Return to Explore mode"),
         ("", ""),
-        ("Create / Delete (tree focus)", ""),
-        ("  a", "Add item (sibling or child)"),
-        ("  d", "Delete selected item"),
-        ("  A", "Add entry to container / MetaCommand"),
-        ("  x", "Remove last entry from container / MetaCommand"),
-        ("", ""),
-        ("File", ""),
+        ("File operations (Explore + Edit)", ""),
         ("  u", "Undo last change"),
         ("  Ctrl+R", "Redo"),
         ("  r", "Reload from disk"),
         ("  s / Ctrl+W", "Save to disk"),
         ("", ""),
-        ("Search", ""),
-        ("  /", "Open search prompt"),
-        ("  n / N", "Next / previous match"),
-        ("  Esc / Enter", "Close search prompt"),
+        ("Reference navigation", ""),
+        ("  f", "Follow reference (Param→Type, Type→Users, Ctnr→Base, Cmd→Base)"),
+        ("  [", "Go back (return from last follow)"),
         ("", ""),
-        ("Overlays", ""),
+        ("Search (Explore mode)", ""),
+        ("  /", "Open search prompt — type then Enter to search"),
+        ("  n / N", "Next / previous match"),
+        ("  Esc", "Cancel search (clear)"),
+        ("", ""),
+        ("Overlays (Explore mode)", ""),
         ("  e", "Toggle error list"),
         ("  ?", "Toggle this help"),
         ("  Esc", "Close overlay"),
         ("", ""),
         ("  q / Ctrl+C", "Quit"),
         ("", ""),
-        ("Type / field editing (tree focus)", ""),
+        ("Edit mode operations", ""),
+        ("  i", "Rename selected item"),
+        ("  C", "Edit description"),
+        ("  a", "Add item (sibling or child)"),
+        ("  d", "Delete selected item"),
+        ("  A", "Add entry to container / MetaCommand"),
+        ("  x", "Remove last entry"),
         ("  E", "Set encoding (Integer / Float types)"),
         ("  S", "Toggle signed/unsigned (Integer type)"),
         ("  b", "Set base type / container / MetaCommand"),

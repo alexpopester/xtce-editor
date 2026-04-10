@@ -10,6 +10,14 @@ use super::{
     },
 };
 
+/// Encoding used inside `AbsoluteTimeParameterType` and `RelativeTimeParameterType`.
+/// XTCE wraps the encoding in a `<Encoding>` element; the inner element selects the variant.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimeEncoding {
+    Integer(IntegerDataEncoding),
+    Float(FloatDataEncoding),
+}
+
 /// All telemetry-related definitions for a SpaceSystem.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TelemetryMetaData {
@@ -75,84 +83,98 @@ pub enum ParameterType {
     Binary(BinaryParameterType),
     Aggregate(AggregateParameterType),
     Array(ArrayParameterType),
+    AbsoluteTime(AbsoluteTimeParameterType),
+    RelativeTime(RelativeTimeParameterType),
 }
 
 impl ParameterType {
     pub fn name(&self) -> &str {
         match self {
-            ParameterType::Integer(t) => &t.name,
-            ParameterType::Float(t) => &t.name,
-            ParameterType::Enumerated(t) => &t.name,
-            ParameterType::Boolean(t) => &t.name,
-            ParameterType::String(t) => &t.name,
-            ParameterType::Binary(t) => &t.name,
-            ParameterType::Aggregate(t) => &t.name,
-            ParameterType::Array(t) => &t.name,
+            ParameterType::Integer(t)      => &t.name,
+            ParameterType::Float(t)        => &t.name,
+            ParameterType::Enumerated(t)   => &t.name,
+            ParameterType::Boolean(t)      => &t.name,
+            ParameterType::String(t)       => &t.name,
+            ParameterType::Binary(t)       => &t.name,
+            ParameterType::Aggregate(t)    => &t.name,
+            ParameterType::Array(t)        => &t.name,
+            ParameterType::AbsoluteTime(t) => &t.name,
+            ParameterType::RelativeTime(t) => &t.name,
         }
     }
 
     pub fn set_name(&mut self, name: String) {
         match self {
-            ParameterType::Integer(t) => t.name = name,
-            ParameterType::Float(t) => t.name = name,
-            ParameterType::Enumerated(t) => t.name = name,
-            ParameterType::Boolean(t) => t.name = name,
-            ParameterType::String(t) => t.name = name,
-            ParameterType::Binary(t) => t.name = name,
-            ParameterType::Aggregate(t) => t.name = name,
-            ParameterType::Array(t) => t.name = name,
+            ParameterType::Integer(t)      => t.name = name,
+            ParameterType::Float(t)        => t.name = name,
+            ParameterType::Enumerated(t)   => t.name = name,
+            ParameterType::Boolean(t)      => t.name = name,
+            ParameterType::String(t)       => t.name = name,
+            ParameterType::Binary(t)       => t.name = name,
+            ParameterType::Aggregate(t)    => t.name = name,
+            ParameterType::Array(t)        => t.name = name,
+            ParameterType::AbsoluteTime(t) => t.name = name,
+            ParameterType::RelativeTime(t) => t.name = name,
         }
     }
 
     pub fn short_description(&self) -> Option<&str> {
         match self {
-            ParameterType::Integer(t) => t.short_description.as_deref(),
-            ParameterType::Float(t) => t.short_description.as_deref(),
-            ParameterType::Enumerated(t) => t.short_description.as_deref(),
-            ParameterType::Boolean(t) => t.short_description.as_deref(),
-            ParameterType::String(t) => t.short_description.as_deref(),
-            ParameterType::Binary(t) => t.short_description.as_deref(),
-            ParameterType::Aggregate(t) => t.short_description.as_deref(),
-            ParameterType::Array(t) => t.short_description.as_deref(),
+            ParameterType::Integer(t)      => t.short_description.as_deref(),
+            ParameterType::Float(t)        => t.short_description.as_deref(),
+            ParameterType::Enumerated(t)   => t.short_description.as_deref(),
+            ParameterType::Boolean(t)      => t.short_description.as_deref(),
+            ParameterType::String(t)       => t.short_description.as_deref(),
+            ParameterType::Binary(t)       => t.short_description.as_deref(),
+            ParameterType::Aggregate(t)    => t.short_description.as_deref(),
+            ParameterType::Array(t)        => t.short_description.as_deref(),
+            ParameterType::AbsoluteTime(t) => t.short_description.as_deref(),
+            ParameterType::RelativeTime(t) => t.short_description.as_deref(),
         }
     }
 
     pub fn set_short_description(&mut self, desc: Option<String>) {
         match self {
-            ParameterType::Integer(t) => t.short_description = desc,
-            ParameterType::Float(t) => t.short_description = desc,
-            ParameterType::Enumerated(t) => t.short_description = desc,
-            ParameterType::Boolean(t) => t.short_description = desc,
-            ParameterType::String(t) => t.short_description = desc,
-            ParameterType::Binary(t) => t.short_description = desc,
-            ParameterType::Aggregate(t) => t.short_description = desc,
-            ParameterType::Array(t) => t.short_description = desc,
+            ParameterType::Integer(t)      => t.short_description = desc,
+            ParameterType::Float(t)        => t.short_description = desc,
+            ParameterType::Enumerated(t)   => t.short_description = desc,
+            ParameterType::Boolean(t)      => t.short_description = desc,
+            ParameterType::String(t)       => t.short_description = desc,
+            ParameterType::Binary(t)       => t.short_description = desc,
+            ParameterType::Aggregate(t)    => t.short_description = desc,
+            ParameterType::Array(t)        => t.short_description = desc,
+            ParameterType::AbsoluteTime(t) => t.short_description = desc,
+            ParameterType::RelativeTime(t) => t.short_description = desc,
         }
     }
 
     pub fn set_base_type(&mut self, base: Option<String>) {
         match self {
-            ParameterType::Integer(t) => t.base_type = base,
-            ParameterType::Float(t) => t.base_type = base,
-            ParameterType::Enumerated(t) => t.base_type = base,
-            ParameterType::Boolean(t) => t.base_type = base,
-            ParameterType::String(t) => t.base_type = base,
-            ParameterType::Binary(t) => t.base_type = base,
-            ParameterType::Aggregate(t) => t.base_type = base,
-            ParameterType::Array(t) => t.base_type = base,
+            ParameterType::Integer(t)      => t.base_type = base,
+            ParameterType::Float(t)        => t.base_type = base,
+            ParameterType::Enumerated(t)   => t.base_type = base,
+            ParameterType::Boolean(t)      => t.base_type = base,
+            ParameterType::String(t)       => t.base_type = base,
+            ParameterType::Binary(t)       => t.base_type = base,
+            ParameterType::Aggregate(t)    => t.base_type = base,
+            ParameterType::Array(t)        => t.base_type = base,
+            ParameterType::AbsoluteTime(t) => t.base_type = base,
+            ParameterType::RelativeTime(t) => t.base_type = base,
         }
     }
 
     pub fn unit_set_mut(&mut self) -> &mut Vec<crate::model::types::Unit> {
         match self {
-            ParameterType::Integer(t)    => &mut t.unit_set,
-            ParameterType::Float(t)      => &mut t.unit_set,
-            ParameterType::Enumerated(t) => &mut t.unit_set,
-            ParameterType::Boolean(t)    => &mut t.unit_set,
-            ParameterType::String(t)     => &mut t.unit_set,
-            ParameterType::Binary(t)     => &mut t.unit_set,
-            ParameterType::Aggregate(t)  => &mut t.unit_set,
-            ParameterType::Array(t)      => &mut t.unit_set,
+            ParameterType::Integer(t)      => &mut t.unit_set,
+            ParameterType::Float(t)        => &mut t.unit_set,
+            ParameterType::Enumerated(t)   => &mut t.unit_set,
+            ParameterType::Boolean(t)      => &mut t.unit_set,
+            ParameterType::String(t)       => &mut t.unit_set,
+            ParameterType::Binary(t)       => &mut t.unit_set,
+            ParameterType::Aggregate(t)    => &mut t.unit_set,
+            ParameterType::Array(t)        => &mut t.unit_set,
+            ParameterType::AbsoluteTime(t) => &mut t.unit_set,
+            ParameterType::RelativeTime(t) => &mut t.unit_set,
         }
     }
 }
@@ -439,6 +461,66 @@ impl ArrayParameterType {
             base_type: None,
             array_type_ref: array_type_ref.into(),
             number_of_dimensions: 1,
+        }
+    }
+}
+
+/// An absolute-time parameter type (XTCE `AbsoluteTimeParameterType`).
+///
+/// Represents a timestamp with an optional data encoding and an optional
+/// epoch reference (e.g. "UNIX", "GPS", "J2000", "TAI").
+#[derive(Debug, Clone, PartialEq)]
+pub struct AbsoluteTimeParameterType {
+    pub name: String,
+    pub short_description: Option<String>,
+    pub long_description: Option<String>,
+    pub alias_set: Vec<Alias>,
+    pub unit_set: Vec<Unit>,
+    pub base_type: Option<String>,
+    /// Optional data encoding for the raw time value.
+    pub encoding: Option<TimeEncoding>,
+    /// Optional epoch string (e.g. "UNIX", "GPS", "J2000", "TAI").
+    pub reference_time: Option<String>,
+}
+
+impl AbsoluteTimeParameterType {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            short_description: None,
+            long_description: None,
+            alias_set: Vec::new(),
+            unit_set: Vec::new(),
+            base_type: None,
+            encoding: None,
+            reference_time: None,
+        }
+    }
+}
+
+/// A relative-time (duration) parameter type (XTCE `RelativeTimeParameterType`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelativeTimeParameterType {
+    pub name: String,
+    pub short_description: Option<String>,
+    pub long_description: Option<String>,
+    pub alias_set: Vec<Alias>,
+    pub unit_set: Vec<Unit>,
+    pub base_type: Option<String>,
+    /// Optional data encoding for the raw duration value.
+    pub encoding: Option<TimeEncoding>,
+}
+
+impl RelativeTimeParameterType {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            short_description: None,
+            long_description: None,
+            alias_set: Vec::new(),
+            unit_set: Vec::new(),
+            base_type: None,
+            encoding: None,
         }
     }
 }

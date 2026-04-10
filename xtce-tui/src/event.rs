@@ -61,6 +61,10 @@ pub enum Action {
     SearchNext,
     /// Go back to the previous search match.
     SearchPrev,
+    /// Commit the current query: run the search, jump to first result, exit search mode.
+    SearchCommit,
+    /// Cancel search: exit search mode and clear the query + matches.
+    SearchCancel,
     /// Exit search mode (keeps matches highlighted for navigation).
     SearchExit,
     /// Undo the last mutation.
@@ -69,6 +73,14 @@ pub enum Action {
     Redo,
     /// Save the current SpaceSystem to disk.
     Save,
+    /// Enter Edit mode (mutation menu).
+    EnterEditMode,
+    /// Exit Edit mode back to Explore.
+    ExitEditMode,
+    /// Follow the reference under the cursor: jump to the type, base, or referenced item.
+    GoToRef,
+    /// Pop the navigation history stack and jump back to the previous location.
+    NavBack,
     /// Open an inline edit prompt for the given field on the selected node.
     EditStart(EditField),
     /// Append a character to the edit buffer (only dispatched in edit mode).
@@ -182,10 +194,12 @@ pub enum Action {
     CalibratorCancel,
 }
 
-/// Map a raw crossterm [`KeyEvent`] to an [`Action`] in normal mode.
+/// Map a raw crossterm [`KeyEvent`] to an [`Action`] in **Explore mode** (default).
 ///
-/// Returns `None` for unbound keys, which are silently ignored by the
-/// event loop.
+/// Explore mode binds navigation, search, file operations, and overlays.
+/// Mutation keys are only available after pressing `m` to enter Edit mode.
+///
+/// Returns `None` for unbound keys.
 pub fn key_to_action(key: KeyEvent) -> Option<Action> {
     match (key.code, key.modifiers) {
         // Quit
@@ -207,10 +221,7 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Left, _) | (KeyCode::Char('h'), _) => Some(Action::NavLeft),
         // Panel management
         (KeyCode::Tab, _) => Some(Action::FocusNext),
-        // Editing
-        (KeyCode::Char('i'), _) => Some(Action::EditStart(EditField::Name)),
-        (KeyCode::Char('C'), _) => Some(Action::EditStart(EditField::ShortDescription)),
-        // File operations
+        // File operations (accessible from Explore so they're always reachable)
         (KeyCode::Char('u'), _) => Some(Action::Undo),
         (KeyCode::Char('r'), KeyModifiers::CONTROL) => Some(Action::Redo),
         (KeyCode::Char('r'), _) => Some(Action::Reload),
@@ -221,7 +232,51 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('/'), _) => Some(Action::SearchStart),
         (KeyCode::Char('n'), _) => Some(Action::SearchNext),
         (KeyCode::Char('N'), _) => Some(Action::SearchPrev),
-        // Create / delete / entry editing
+        // Reference navigation
+        (KeyCode::Char('f'), _) => Some(Action::GoToRef),
+        (KeyCode::Char('['), _) => Some(Action::NavBack),
+        // Enter Edit mode
+        (KeyCode::Char('m'), _) => Some(Action::EnterEditMode),
+        // Overlays
+        (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
+        (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
+        (KeyCode::Esc, _) => Some(Action::CloseOverlay),
+        _ => None,
+    }
+}
+
+/// Map a raw crossterm [`KeyEvent`] to an [`Action`] while in **Edit mode**.
+///
+/// Edit mode exposes all mutation operations. `Esc` returns to Explore.
+/// Navigation and file ops also work here for convenience.
+pub fn edit_mode_key_to_action(key: KeyEvent) -> Option<Action> {
+    match (key.code, key.modifiers) {
+        // Always allow quit.
+        (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
+        // Exit edit mode.
+        (KeyCode::Esc, _) => Some(Action::ExitEditMode),
+        // Navigation still works in edit mode.
+        (KeyCode::Up, _) | (KeyCode::Char('k'), _) => Some(Action::MoveUp),
+        (KeyCode::Down, _) | (KeyCode::Char('j'), _) => Some(Action::MoveDown),
+        (KeyCode::PageUp, _) | (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+            Some(Action::PageUp)
+        }
+        (KeyCode::PageDown, _) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+            Some(Action::PageDown)
+        }
+        (KeyCode::Enter, _) | (KeyCode::Char(' '), _) => Some(Action::ToggleExpand),
+        (KeyCode::Right, _) | (KeyCode::Char('l'), _) => Some(Action::NavRight),
+        (KeyCode::Left, _) | (KeyCode::Char('h'), _) => Some(Action::NavLeft),
+        (KeyCode::Tab, _) => Some(Action::FocusNext),
+        // File ops in edit mode too.
+        (KeyCode::Char('u'), _) => Some(Action::Undo),
+        (KeyCode::Char('r'), KeyModifiers::CONTROL) => Some(Action::Redo),
+        (KeyCode::Char('s'), _) | (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+            Some(Action::Save)
+        }
+        // Mutation operations (previously scattered across normal mode).
+        (KeyCode::Char('i'), _) => Some(Action::EditStart(EditField::Name)),
+        (KeyCode::Char('C'), _) => Some(Action::EditStart(EditField::ShortDescription)),
         (KeyCode::Char('a'), _) => Some(Action::CreateStart),
         (KeyCode::Char('d'), _) => Some(Action::DeleteStart),
         (KeyCode::Char('A'), _) => Some(Action::EntryAddStart),
@@ -239,10 +294,6 @@ pub fn key_to_action(key: KeyEvent) -> Option<Action> {
         (KeyCode::Char('L'), _) => Some(Action::EntryLocationStart),
         (KeyCode::Char('K'), _) => Some(Action::CalibratorStart),
         (KeyCode::Char('U'), _) => Some(Action::UnitEditStart),
-        // Overlays
-        (KeyCode::Char('e'), _) => Some(Action::ToggleErrors),
-        (KeyCode::Char('?'), _) => Some(Action::ToggleHelp),
-        (KeyCode::Esc, _) => Some(Action::CloseOverlay),
         _ => None,
     }
 }
@@ -446,8 +497,10 @@ pub fn search_key_to_action(key: KeyEvent) -> Option<Action> {
     match (key.code, key.modifiers) {
         // Always allow quit via Ctrl+C.
         (KeyCode::Char('c'), KeyModifiers::CONTROL) => Some(Action::Quit),
-        // Exit search mode.
-        (KeyCode::Esc, _) | (KeyCode::Enter, _) => Some(Action::SearchExit),
+        // Enter commits the query and runs the search.
+        (KeyCode::Enter, _) => Some(Action::SearchCommit),
+        // Esc cancels and clears.
+        (KeyCode::Esc, _) => Some(Action::SearchCancel),
         // Edit query.
         (KeyCode::Backspace, _) => Some(Action::SearchBackspace),
         // Navigation still works so the user can see match context.

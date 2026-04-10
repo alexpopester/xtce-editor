@@ -379,14 +379,16 @@ pub fn get_ss<'a>(root: &'a SpaceSystem, path: &[String]) -> Option<&'a SpaceSys
 
 fn pt_kind(pt: &ParameterType) -> &'static str {
     match pt {
-        ParameterType::Integer(_) => "Integer",
-        ParameterType::Float(_) => "Float",
-        ParameterType::Enumerated(_) => "Enum",
-        ParameterType::Boolean(_) => "Boolean",
-        ParameterType::String(_) => "String",
-        ParameterType::Binary(_) => "Binary",
-        ParameterType::Aggregate(_) => "Aggregate",
-        ParameterType::Array(_) => "Array",
+        ParameterType::Integer(_)      => "Integer",
+        ParameterType::Float(_)        => "Float",
+        ParameterType::Enumerated(_)   => "Enum",
+        ParameterType::Boolean(_)      => "Boolean",
+        ParameterType::String(_)       => "String",
+        ParameterType::Binary(_)       => "Binary",
+        ParameterType::Aggregate(_)    => "Aggregate",
+        ParameterType::Array(_)        => "Array",
+        ParameterType::AbsoluteTime(_) => "AbsoluteTime",
+        ParameterType::RelativeTime(_) => "RelativeTime",
     }
 }
 

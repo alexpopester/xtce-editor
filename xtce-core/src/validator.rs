@@ -355,10 +355,7 @@ fn validate_sequence_container(
     if let Some(base) = &container.base_container {
         let cref = base.container_ref.as_str();
         if cref == name {
-            errors.push(ValidationError::SelfReferentialInheritance {
-                name: name.to_string(),
-                location: Some(container_loc()),
-            });
+            // Self-referential base is valid XTCE: treat the container as standalone.
         } else if !is_qualified_ref(cref)
             && !scope.containers.contains(cref)
             && !all_containers.contains(cref)
@@ -792,8 +789,10 @@ fn pt_base_type(pt: &ParameterType) -> Option<&str> {
         ParameterType::Boolean(t) => t.base_type.as_deref(),
         ParameterType::String(t) => t.base_type.as_deref(),
         ParameterType::Binary(t) => t.base_type.as_deref(),
-        ParameterType::Aggregate(t) => t.base_type.as_deref(),
-        ParameterType::Array(t) => t.base_type.as_deref(),
+        ParameterType::Aggregate(t)    => t.base_type.as_deref(),
+        ParameterType::Array(t)        => t.base_type.as_deref(),
+        ParameterType::AbsoluteTime(t) => t.base_type.as_deref(),
+        ParameterType::RelativeTime(t) => t.base_type.as_deref(),
     }
 }
 

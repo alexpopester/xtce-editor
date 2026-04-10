@@ -244,9 +244,10 @@ fn resolve_type_info(param_name: &str, idx: &SsIndex<'_>) -> TypeInfo {
                 .unwrap_or(64);
             TypeInfo::Binary { size_in_bits: size }
         }
-        ParameterType::Aggregate(_) | ParameterType::Array(_) => {
-            TypeInfo::Unknown { size_in_bits: 32 }
-        }
+        ParameterType::Aggregate(_)
+        | ParameterType::Array(_)
+        | ParameterType::AbsoluteTime(_)
+        | ParameterType::RelativeTime(_) => TypeInfo::Unknown { size_in_bits: 32 },
     }
 }
 

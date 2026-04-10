@@ -68,17 +68,24 @@ pub enum ValidationError {
         location: Option<ErrorLocation>,
     },
 
-    #[error("'{name}' lists itself as its own base container")]
-    SelfReferentialInheritance {
-        name: String,
-        location: Option<ErrorLocation>,
-    },
-
     #[error("missing required field '{field}' on {element} '{name}'")]
     MissingRequiredField { field: &'static str, element: &'static str, name: String },
 
     #[error("schema error: {0}")]
     SchemaError(String),
+}
+
+impl ValidationError {
+    /// Number of terminal lines this error occupies in the TUI error overlay.
+    pub fn render_line_count(&self) -> usize {
+        match self {
+            ValidationError::UnresolvedReference { .. } => 3,
+            ValidationError::CyclicInheritance { .. } => 2,
+            ValidationError::DuplicateName { .. } => 3,
+            ValidationError::MissingRequiredField { .. } => 2,
+            ValidationError::SchemaError(_) => 2,
+        }
+    }
 }
 
 #[derive(Debug, Error)]

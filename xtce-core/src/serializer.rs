@@ -17,9 +17,10 @@ use crate::model::container::{
 };
 use crate::model::space_system::{AuthorInfo, Header, SpaceSystem};
 use crate::model::telemetry::{
-    AggregateParameterType, ArrayParameterType, BinaryParameterType, BooleanParameterType,
-    EnumeratedParameterType, FloatParameterType, IntegerParameterType, Parameter,
-    ParameterType, StringParameterType, TelemetryMetaData,
+    AbsoluteTimeParameterType, AggregateParameterType, ArrayParameterType, BinaryParameterType,
+    BooleanParameterType, EnumeratedParameterType, FloatParameterType, IntegerParameterType,
+    Parameter, ParameterType, RelativeTimeParameterType, StringParameterType, TelemetryMetaData,
+    TimeEncoding,
 };
 use crate::model::types::{
     Alias, BinaryDataEncoding, BinarySize, ByteOrder, Calibrator, FloatDataEncoding,
@@ -452,6 +453,8 @@ pub(crate) fn write_parameter_type_set<'a>(
             ParameterType::Binary(t) => write_binary_parameter_type(w, t)?,
             ParameterType::Aggregate(t) => write_aggregate_parameter_type(w, t)?,
             ParameterType::Array(t) => write_array_parameter_type(w, t)?,
+            ParameterType::AbsoluteTime(t) => write_absolute_time_parameter_type(w, t)?,
+            ParameterType::RelativeTime(t) => write_relative_time_parameter_type(w, t)?,
         }
     }
     w.write_event(Event::End(BytesEnd::new("ParameterTypeSet")))?;
@@ -724,6 +727,88 @@ fn write_array_parameter_type(w: &mut W, t: &ArrayParameterType) -> Result<(), P
         e.push_attribute(("baseType", bt.as_str()));
     }
     w.write_event(Event::Empty(e))?;
+    Ok(())
+}
+
+fn write_absolute_time_parameter_type(
+    w: &mut W,
+    t: &AbsoluteTimeParameterType,
+) -> Result<(), ParseError> {
+    let mut e = BytesStart::new("AbsoluteTimeParameterType");
+    e.push_attribute(("name", t.name.as_str()));
+    if let Some(d) = &t.short_description {
+        e.push_attribute(("shortDescription", d.as_str()));
+    }
+    if let Some(bt) = &t.base_type {
+        e.push_attribute(("baseType", bt.as_str()));
+    }
+    let has_children = t.long_description.is_some()
+        || !t.alias_set.is_empty()
+        || !t.unit_set.is_empty()
+        || t.encoding.is_some()
+        || t.reference_time.is_some();
+    if !has_children {
+        w.write_event(Event::Empty(e))?;
+        return Ok(());
+    }
+    w.write_event(Event::Start(e))?;
+    if let Some(d) = &t.long_description {
+        wt(w, "LongDescription", d)?;
+    }
+    write_alias_set(w, &t.alias_set)?;
+    write_unit_set(w, &t.unit_set)?;
+    if let Some(enc) = &t.encoding {
+        w.write_event(Event::Start(BytesStart::new("Encoding")))?;
+        match enc {
+            TimeEncoding::Integer(ie) => write_integer_data_encoding(w, ie)?,
+            TimeEncoding::Float(fe) => write_float_data_encoding(w, fe)?,
+        }
+        w.write_event(Event::End(BytesEnd::new("Encoding")))?;
+    }
+    if let Some(epoch) = &t.reference_time {
+        w.write_event(Event::Start(BytesStart::new("ReferenceTime")))?;
+        wt(w, "Epoch", epoch)?;
+        w.write_event(Event::End(BytesEnd::new("ReferenceTime")))?;
+    }
+    w.write_event(Event::End(BytesEnd::new("AbsoluteTimeParameterType")))?;
+    Ok(())
+}
+
+fn write_relative_time_parameter_type(
+    w: &mut W,
+    t: &RelativeTimeParameterType,
+) -> Result<(), ParseError> {
+    let mut e = BytesStart::new("RelativeTimeParameterType");
+    e.push_attribute(("name", t.name.as_str()));
+    if let Some(d) = &t.short_description {
+        e.push_attribute(("shortDescription", d.as_str()));
+    }
+    if let Some(bt) = &t.base_type {
+        e.push_attribute(("baseType", bt.as_str()));
+    }
+    let has_children = t.long_description.is_some()
+        || !t.alias_set.is_empty()
+        || !t.unit_set.is_empty()
+        || t.encoding.is_some();
+    if !has_children {
+        w.write_event(Event::Empty(e))?;
+        return Ok(());
+    }
+    w.write_event(Event::Start(e))?;
+    if let Some(d) = &t.long_description {
+        wt(w, "LongDescription", d)?;
+    }
+    write_alias_set(w, &t.alias_set)?;
+    write_unit_set(w, &t.unit_set)?;
+    if let Some(enc) = &t.encoding {
+        w.write_event(Event::Start(BytesStart::new("Encoding")))?;
+        match enc {
+            TimeEncoding::Integer(ie) => write_integer_data_encoding(w, ie)?,
+            TimeEncoding::Float(fe) => write_float_data_encoding(w, fe)?,
+        }
+        w.write_event(Event::End(BytesEnd::new("Encoding")))?;
+    }
+    w.write_event(Event::End(BytesEnd::new("RelativeTimeParameterType")))?;
     Ok(())
 }
 

@@ -16,14 +16,15 @@ use xtce_core::model::{
     },
     space_system::SpaceSystem,
     telemetry::{
-        AggregateParameterType, ArrayParameterType, BinaryParameterType, BooleanParameterType,
-        DataSource, EnumeratedParameterType, FloatParameterType, IntegerParameterType, Parameter,
-        ParameterType, StringParameterType, TelemetryMetaData,
+        AbsoluteTimeParameterType, AggregateParameterType, ArrayParameterType,
+        BinaryParameterType, BooleanParameterType, DataSource, EnumeratedParameterType,
+        FloatParameterType, IntegerParameterType, Parameter, ParameterType,
+        RelativeTimeParameterType, StringParameterType, TelemetryMetaData, TimeEncoding,
     },
     types::{
         BinaryDataEncoding, BinarySize, ByteOrder, Calibrator, FloatDataEncoding, FloatEncoding,
         FloatSizeInBits, IntegerDataEncoding, IntegerEncoding, StringDataEncoding, StringEncoding,
-        StringSize, Unit, ValueEnumeration,
+        StringSize, Unit,
     },
 };
 
@@ -255,19 +256,21 @@ fn detail_group_names(title: &str, names: &[&str]) -> Vec<Line<'static>> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ParameterType (all 8 variants)
+// ParameterType (all variants)
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn detail_parameter_type(pt: &ParameterType) -> Vec<Line<'static>> {
     match pt {
-        ParameterType::Integer(t) => detail_integer_pt(t),
-        ParameterType::Float(t) => detail_float_pt(t),
-        ParameterType::Enumerated(t) => detail_enumerated_pt(t),
-        ParameterType::Boolean(t) => detail_boolean_pt(t),
-        ParameterType::String(t) => detail_string_pt(t),
-        ParameterType::Binary(t) => detail_binary_pt(t),
-        ParameterType::Aggregate(t) => detail_aggregate_pt(t),
-        ParameterType::Array(t) => detail_array_pt(t),
+        ParameterType::Integer(t)      => detail_integer_pt(t),
+        ParameterType::Float(t)        => detail_float_pt(t),
+        ParameterType::Enumerated(t)   => detail_enumerated_pt(t),
+        ParameterType::Boolean(t)      => detail_boolean_pt(t),
+        ParameterType::String(t)       => detail_string_pt(t),
+        ParameterType::Binary(t)       => detail_binary_pt(t),
+        ParameterType::Aggregate(t)    => detail_aggregate_pt(t),
+        ParameterType::Array(t)        => detail_array_pt(t),
+        ParameterType::AbsoluteTime(t) => detail_absolute_time_pt(t),
+        ParameterType::RelativeTime(t) => detail_relative_time_pt(t),
     }
 }
 
@@ -675,7 +678,64 @@ fn detail_parameter_type_inline(pt: &ParameterType) -> Vec<Line<'static>> {
             field("  Kind:", "Array".to_string()),
             field("  Element type:", t.array_type_ref.clone()),
         ],
+        ParameterType::AbsoluteTime(t) => {
+            let mut lines = vec![field("  Kind:", "AbsoluteTime".to_string())];
+            if let Some(epoch) = &t.reference_time {
+                lines.push(field("  Epoch:", epoch.clone()));
+            }
+            lines
+        }
+        ParameterType::RelativeTime(_) => vec![field("  Kind:", "RelativeTime".to_string())],
     }
+}
+
+fn detail_absolute_time_pt(t: &AbsoluteTimeParameterType) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        heading(format!("AbsoluteTimeParameterType: {}", t.name)),
+        sep(),
+    ];
+    if let Some(d) = &t.short_description {
+        lines.push(field("Description:", d.clone()));
+    }
+    if let Some(b) = &t.base_type {
+        lines.push(field("Base type:", b.clone()));
+    }
+    if let Some(epoch) = &t.reference_time {
+        lines.push(field("Epoch:", epoch.clone()));
+    }
+    if let Some(enc) = &t.encoding {
+        lines.push(field("Encoding:", match enc {
+            TimeEncoding::Integer(_) => "Integer".to_string(),
+            TimeEncoding::Float(_)   => "Float".to_string(),
+        }));
+    }
+    if !t.unit_set.is_empty() {
+        lines.push(field("Units:", t.unit_set.iter().map(fmt_unit).collect::<Vec<_>>().join(", ")));
+    }
+    lines
+}
+
+fn detail_relative_time_pt(t: &RelativeTimeParameterType) -> Vec<Line<'static>> {
+    let mut lines = vec![
+        heading(format!("RelativeTimeParameterType: {}", t.name)),
+        sep(),
+    ];
+    if let Some(d) = &t.short_description {
+        lines.push(field("Description:", d.clone()));
+    }
+    if let Some(b) = &t.base_type {
+        lines.push(field("Base type:", b.clone()));
+    }
+    if let Some(enc) = &t.encoding {
+        lines.push(field("Encoding:", match enc {
+            TimeEncoding::Integer(_) => "Integer".to_string(),
+            TimeEncoding::Float(_)   => "Float".to_string(),
+        }));
+    }
+    if !t.unit_set.is_empty() {
+        lines.push(field("Units:", t.unit_set.iter().map(fmt_unit).collect::<Vec<_>>().join(", ")));
+    }
+    lines
 }
 
 fn fmt_calibrator_kind(cal: &Calibrator) -> String {
@@ -711,7 +771,7 @@ fn detail_sequence_container(
     }
 
     if let Some(bc) = &c.base_container {
-        // Skip self-referential base containers — they're a user error, not inheritance.
+        // Self-referential base is valid XTCE; treat the container as standalone (no inheritance).
         if bc.container_ref != c.name {
             lines.push(blank());
             lines.push(subheading("Inheritance"));
@@ -913,7 +973,10 @@ fn parameter_type_bits(pt: &ParameterType) -> Option<u32> {
             BinarySize::Fixed(n) => Some(*n),
             BinarySize::Variable { .. } => None,
         }),
-        ParameterType::Aggregate(_) | ParameterType::Array(_) => None,
+        ParameterType::Aggregate(_)
+        | ParameterType::Array(_)
+        | ParameterType::AbsoluteTime(_)
+        | ParameterType::RelativeTime(_) => None,
     }
 }
 

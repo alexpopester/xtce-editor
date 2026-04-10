@@ -13,9 +13,9 @@ use crate::model::command::{
     StringArgumentType,
 };
 use crate::model::telemetry::{
-    AggregateParameterType, ArrayParameterType, BinaryParameterType, BooleanParameterType,
-    EnumeratedParameterType, FloatParameterType, IntegerParameterType, StringParameterType,
-    TelemetryMetaData,
+    AbsoluteTimeParameterType, AggregateParameterType, ArrayParameterType, BinaryParameterType,
+    BooleanParameterType, EnumeratedParameterType, FloatParameterType, IntegerParameterType,
+    RelativeTimeParameterType, StringParameterType, TelemetryMetaData, TimeEncoding,
 };
 use crate::model::types::{
     Alias, BinaryDataEncoding, BinarySize, ByteOrder, Calibrator, FloatDataEncoding, FloatEncoding,
@@ -260,6 +260,12 @@ pub(super) fn parse_parameter_type_set<R: BufRead>(
                     }
                     b"ArrayParameterType" => {
                         ParameterType::Array(parse_array_parameter_type(ctx, &e)?)
+                    }
+                    b"AbsoluteTimeParameterType" => {
+                        ParameterType::AbsoluteTime(parse_absolute_time_parameter_type(ctx, &e)?)
+                    }
+                    b"RelativeTimeParameterType" => {
+                        ParameterType::RelativeTime(parse_relative_time_parameter_type(ctx, &e)?)
                     }
                     _ => {
                         ctx.skip_element(&e)?;
@@ -551,6 +557,112 @@ pub(super) fn parse_array_parameter_type<R: BufRead>(
     // ArrayParameterType has no meaningful children for our model; drain to End.
     ctx.skip_element(start)?;
     Ok(t)
+}
+
+pub(super) fn parse_absolute_time_parameter_type<R: BufRead>(
+    ctx: &mut ParseContext<R>,
+    start: &BytesStart<'_>,
+) -> Result<AbsoluteTimeParameterType, ParseError> {
+    let mut t = AbsoluteTimeParameterType::new(
+        ctx.require_attr(start, "name", "AbsoluteTimeParameterType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"Encoding" => t.encoding = parse_time_encoding(ctx)?,
+                b"ReferenceTime" => t.reference_time = parse_reference_time_epoch(ctx)?,
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof {
+                    expected: "</AbsoluteTimeParameterType>",
+                })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
+}
+
+pub(super) fn parse_relative_time_parameter_type<R: BufRead>(
+    ctx: &mut ParseContext<R>,
+    start: &BytesStart<'_>,
+) -> Result<RelativeTimeParameterType, ParseError> {
+    let mut t = RelativeTimeParameterType::new(
+        ctx.require_attr(start, "name", "RelativeTimeParameterType")?.as_ref(),
+    );
+    t.short_description = ctx.get_attr_owned(start, "shortDescription");
+    t.base_type = ctx.get_attr_owned(start, "baseType");
+
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"LongDescription" => t.long_description = Some(ctx.read_text_content()?),
+                b"AliasSet" => t.alias_set = parse_alias_set(ctx)?,
+                b"UnitSet" => t.unit_set = parse_unit_set(ctx)?,
+                b"Encoding" => t.encoding = parse_time_encoding(ctx)?,
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(ParseError::UnexpectedEof {
+                    expected: "</RelativeTimeParameterType>",
+                })
+            }
+            _ => {}
+        }
+    }
+    Ok(t)
+}
+
+/// Parse a `<Encoding>` element containing an IntegerDataEncoding or FloatDataEncoding.
+fn parse_time_encoding<R: BufRead>(
+    ctx: &mut ParseContext<R>,
+) -> Result<Option<TimeEncoding>, ParseError> {
+    let mut result = None;
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"IntegerDataEncoding" => {
+                    result = Some(TimeEncoding::Integer(parse_integer_data_encoding(ctx, &e)?));
+                }
+                b"FloatDataEncoding" => {
+                    result = Some(TimeEncoding::Float(parse_float_data_encoding(ctx, &e)?));
+                }
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => return Err(ParseError::UnexpectedEof { expected: "</Encoding>" }),
+            _ => {}
+        }
+    }
+    Ok(result)
+}
+
+/// Parse a `<ReferenceTime>` element and return the `<Epoch>` text content, if present.
+fn parse_reference_time_epoch<R: BufRead>(
+    ctx: &mut ParseContext<R>,
+) -> Result<Option<String>, ParseError> {
+    let mut epoch = None;
+    loop {
+        match ctx.next()? {
+            Event::Start(e) => match e.local_name().as_ref() {
+                b"Epoch" => epoch = Some(ctx.read_text_content()?),
+                _ => ctx.skip_element(&e)?,
+            },
+            Event::End(_) => break,
+            Event::Eof => return Err(ParseError::UnexpectedEof { expected: "</ReferenceTime>" }),
+            _ => {}
+        }
+    }
+    Ok(epoch)
 }
 
 // ── ArgumentType dispatch ────────────────────────────────────────────────────
