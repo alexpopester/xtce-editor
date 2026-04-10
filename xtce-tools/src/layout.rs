@@ -85,6 +85,7 @@ pub enum TypeInfo {
 }
 
 impl TypeInfo {
+    /// Return the number of bits occupied by this field.
     pub fn size_in_bits(&self) -> u32 {
         match self {
             TypeInfo::Integer { size_in_bits, .. } => *size_in_bits,
@@ -144,6 +145,8 @@ pub struct SsIndex<'a> {
 }
 
 impl<'a> SsIndex<'a> {
+    /// Walk the entire `SpaceSystem` tree and build flat lookup tables for
+    /// containers, parameter types, and parameter-to-type-ref mappings.
     pub fn build(root: &'a SpaceSystem) -> Self {
         let mut idx = Self {
             containers: HashMap::new(),
@@ -154,6 +157,8 @@ impl<'a> SsIndex<'a> {
         idx
     }
 
+    /// Recursively index `ss` and all its descendants, building slash-joined
+    /// paths as we descend.
     fn walk(&mut self, ss: &'a SpaceSystem, path: &str) {
         if let Some(tm) = &ss.telemetry {
             self.index_tm(tm, path);
@@ -164,6 +169,8 @@ impl<'a> SsIndex<'a> {
         }
     }
 
+    /// Insert all parameter types, parameters, and containers from one
+    /// `TelemetryMetaData` block into the index.
     fn index_tm(&mut self, tm: &'a TelemetryMetaData, path: &str) {
         for (name, pt) in &tm.parameter_types {
             self.param_types.insert(name.clone(), pt);
@@ -183,6 +190,9 @@ impl<'a> SsIndex<'a> {
 // TypeInfo resolution
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Resolve the `TypeInfo` for a parameter by following its `parameter_type_ref`
+/// into the index.  Returns `TypeInfo::Unknown { size_in_bits: 8 }` when the
+/// parameter or its type cannot be found.
 fn resolve_type_info(param_name: &str, idx: &SsIndex<'_>) -> TypeInfo {
     let type_ref = match idx.param_type_refs.get(param_name) {
         Some(r) => r.as_str(),
@@ -412,6 +422,10 @@ fn compute_offsets(pending: Vec<PendingField>) -> Vec<FieldLayout> {
 // Discriminator extraction
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Extract a single equality-based discriminator from a `BaseContainer`'s
+/// restriction criteria, if one is present.  `ComparisonList` uses the first
+/// equality comparison found.  Non-equality operators and `BooleanExpression`
+/// variants return `None`.
 fn extract_discriminator(base: &BaseContainer) -> Option<DiscriminatorInfo> {
     let rc = base.restriction_criteria.as_ref()?;
     match rc {

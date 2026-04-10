@@ -23,6 +23,9 @@ pub struct SequenceContainer {
 }
 
 impl SequenceContainer {
+    /// Create a new `SequenceContainer` with the given name and all optional
+    /// fields at their defaults (`abstract = false`, no base container, empty
+    /// entry list).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),

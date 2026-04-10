@@ -107,6 +107,7 @@ fn main() {
     }
 }
 
+/// Parse an XTCE file, printing an error and exiting with code 1 on failure.
 fn load_xtce(path: &Path) -> xtce_core::model::SpaceSystem {
     xtce_core::parser::parse_file(path).unwrap_or_else(|e| {
         eprintln!("Error parsing {:?}: {e}", path);
@@ -114,6 +115,8 @@ fn load_xtce(path: &Path) -> xtce_core::model::SpaceSystem {
     })
 }
 
+/// Derive a default output path by replacing the input file's extension with
+/// `suffix` (e.g. `.lua` or `.pcap`), in the same directory.
 fn default_output(input: &Path, suffix: &str) -> PathBuf {
     let stem = input.file_stem().unwrap_or_default().to_string_lossy();
     let parent = input.parent().unwrap_or(Path::new("."));

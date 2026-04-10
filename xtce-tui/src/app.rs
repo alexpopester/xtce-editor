@@ -1076,6 +1076,9 @@ impl App {
         self.find_container_in_tree(&self.space_system, cref, &[])
     }
 
+    /// DFS search for a `SequenceContainer` named `cref` anywhere in the tree.
+    ///
+    /// Returns the first match as a [`NodeId::TmContainer`] or `None` if not found.
     fn find_container_in_tree(
         &self,
         ss: &xtce_core::SpaceSystem,
@@ -1097,6 +1100,9 @@ impl App {
         None
     }
 
+    /// DFS search for a `MetaCommand` named `name` anywhere in the tree.
+    ///
+    /// Returns the first match as a [`NodeId::CmdMetaCommand`] or `None` if not found.
     fn find_meta_command_in_tree(
         &self,
         ss: &xtce_core::SpaceSystem,
@@ -1133,6 +1139,8 @@ impl App {
         self.schema_errors.clear();
     }
 
+    /// Restore the previous state from the undo stack and push the current state
+    /// onto the redo stack.  Rebuilds the tree and reruns validation.
     fn undo(&mut self) {
         let Some(prev) = self.undo_stack.pop_back() else { return };
         let current = std::mem::replace(&mut self.space_system, prev);
@@ -1145,6 +1153,8 @@ impl App {
         self.rebuild_tree();
     }
 
+    /// Restore the next state from the redo stack and push the current state
+    /// onto the undo stack.  Rebuilds the tree and reruns validation.
     fn redo(&mut self) {
         let Some(next) = self.redo_stack.pop_back() else { return };
         let current = std::mem::replace(&mut self.space_system, next);
@@ -1157,6 +1167,10 @@ impl App {
         self.rebuild_tree();
     }
 
+    /// Move the cursor by `delta` rows (negative = up, positive = down).
+    ///
+    /// In Tree focus this moves the tree row cursor; in Detail focus it scrolls
+    /// the detail panel instead.
     fn move_cursor(&mut self, delta: i64) {
         match self.focus {
             Focus::Tree => {
@@ -1178,6 +1192,7 @@ impl App {
         }
     }
 
+    /// Toggle the expansion state of the currently selected tree node.
     fn toggle_expand(&mut self) {
         let Some(node) = self.tree.get(self.cursor) else {
             return;
@@ -1194,6 +1209,7 @@ impl App {
         self.rebuild_tree();
     }
 
+    /// Expand the current node if it is not already expanded (no-op otherwise).
     fn expand_current(&mut self) {
         let Some(node) = self.tree.get(self.cursor) else {
             return;
@@ -1205,6 +1221,7 @@ impl App {
         }
     }
 
+    /// Collapse the current node if it is expanded (no-op otherwise).
     fn collapse_current(&mut self) {
         let Some(node) = self.tree.get(self.cursor) else {
             return;
@@ -1266,6 +1283,7 @@ impl App {
         }
     }
 
+    /// Switch keyboard focus between the Tree and Detail panels.
     fn cycle_focus(&mut self) {
         self.focus = match self.focus {
             Focus::Tree => Focus::Detail,
@@ -1274,6 +1292,10 @@ impl App {
         self.detail_scroll = 0;
     }
 
+    /// Rebuild the flat tree rows from the current model and expansion state.
+    ///
+    /// Also clamps the cursor to stay within bounds, resets detail scroll, and
+    /// refreshes the search index and match set.
     fn rebuild_tree(&mut self) {
         self.tree = build_tree(&self.space_system, &self.expanded);
         if !self.tree.is_empty() {
@@ -1310,6 +1332,8 @@ impl App {
     ///
     /// The error overlay header occupies 2 fixed lines (group heading + blank).
     /// Each error starts at offset 2 + sum of prior error line counts.
+    /// Adjust `error_scroll` so that the currently focused validation error
+    /// is fully visible within the error overlay.
     fn ensure_error_cursor_visible(&mut self) {
         if self.validation_errors.is_empty() {
             return;
@@ -1381,6 +1405,10 @@ impl App {
 
     // ── Edit prompt ───────────────────────────────────────────────────────────
 
+    /// Open an inline edit prompt for `field` on the currently selected node.
+    ///
+    /// No-op if focus is not on the Tree panel or the current node does not
+    /// support editing the requested field.
     fn start_edit(&mut self, field: EditField) {
         // Only trigger from the tree panel on a leaf or SpaceSystem node.
         if self.focus != Focus::Tree {
@@ -1392,6 +1420,10 @@ impl App {
         self.edit_state = Some(EditState { field, buffer: initial, node_id });
     }
 
+    /// Write the edit buffer back to the model and close the edit prompt.
+    ///
+    /// Validates the new name for uniqueness before applying.  If the name is a
+    /// duplicate, the error is stored in `save_error` and the prompt stays open.
     fn commit_edit(&mut self) {
         let Some(edit) = self.edit_state.take() else { return };
         let new_value = edit.buffer.trim().to_string();
@@ -1511,6 +1543,9 @@ impl App {
         }
     }
 
+    /// Rename an item in the model, updating the IndexMap key and the item's
+    /// `name` field.  Returns the updated [`NodeId`] on success, or `None` if the
+    /// new name collides with an existing sibling.
     fn apply_rename(&mut self, node_id: &NodeId, new_name: String) -> Option<NodeId> {
         match node_id {
             NodeId::SpaceSystem(path) => {
@@ -1588,6 +1623,7 @@ impl App {
         }
     }
 
+    /// Write `desc` as the short description of `node_id` (clearing it when empty).
     fn apply_short_description(&mut self, node_id: &NodeId, desc: String) {
         let opt = if desc.is_empty() { None } else { Some(desc) };
         match node_id {
@@ -1640,6 +1676,10 @@ impl App {
         }
     }
 
+    /// Re-parse the file from disk and reset all transient state.
+    ///
+    /// Clears the undo/redo stacks and sets `dirty = false`.  On parse error
+    /// the current in-memory state is preserved unchanged.
     fn reload(&mut self) {
         match xtce_core::parser::parse_file(&self.path) {
             Ok(ss) => {
@@ -1661,6 +1701,11 @@ impl App {
         }
     }
 
+    /// Serialize the model to XML and write it to `self.path`.
+    ///
+    /// On success, clears `dirty` and `save_error`, then runs XSD schema
+    /// validation via `xmllint` (if available) and stores any schema errors.
+    /// On failure, stores the error in `save_error` for display in the status bar.
     fn save(&mut self) {
         match xtce_core::serializer::serialize(&self.space_system) {
             Err(e) => {
@@ -1687,6 +1732,10 @@ impl App {
 
     // ── Create flow ───────────────────────────────────────────────────────────
 
+    /// Open the add-item wizard for the context of the currently selected node.
+    ///
+    /// Infers the `CreateKind` from the node type (e.g., `TmParameterType` → add
+    /// a ParameterType) and initialises the appropriate first wizard step.
     fn start_create(&mut self) {
         if self.focus != Focus::Tree {
             return;
@@ -1879,6 +1928,9 @@ impl App {
         }
     }
 
+    /// Return `true` if `name` is already taken for items of type `kind` at
+    /// the given `path`.  For `Argument` items, `target_name` is the parent
+    /// `MetaCommand` name.
     fn name_exists(&self, kind: &CreateKind, path: &SsPath, name: &str, target_name: Option<&str>) -> bool {
         let Some(ss) = get_ss(&self.space_system, path) else { return false };
         match kind {
@@ -1919,6 +1971,11 @@ impl App {
         }
     }
 
+    /// Collect the `(display_label, value)` options for a create-dialog picker.
+    ///
+    /// For type-reference pickers, gathers all types visible from `path`
+    /// (current SS and ancestors, outermost last).  For SpaceSystem pickers,
+    /// collects all sub-system paths.
     fn build_picker_items(&self, kind: &CreateKind, path: &SsPath) -> Vec<(String, String)> {
         // Collect types from root down to the target SpaceSystem.
         let mut sources: Vec<&SpaceSystem> = vec![&self.space_system];
@@ -2049,6 +2106,11 @@ impl App {
 
     // ── Delete flow ───────────────────────────────────────────────────────────
 
+    /// Begin the delete confirmation flow for the currently selected node.
+    ///
+    /// Stores a `DeleteConfirmState` that the UI renders as a confirmation prompt.
+    /// Only deletable node types (SpaceSystem, ParameterType, Parameter, etc.) are
+    /// accepted; section header rows are silently ignored.
     fn start_delete(&mut self) {
         if self.focus != Focus::Tree {
             return;
@@ -2066,6 +2128,7 @@ impl App {
         self.delete_confirm = Some(DeleteConfirmState { node_id: node.node_id.clone(), name });
     }
 
+    /// Remove the confirmed node from the model, rebuild the tree, and revalidate.
     fn commit_delete(&mut self) {
         let Some(dc) = self.delete_confirm.take() else { return };
         self.push_undo_snapshot();
@@ -2502,6 +2565,8 @@ impl App {
 
     // ── Picker (ChangeTypeRef / SetBase) ──────────────────────────────────────
 
+    /// Open the picker overlay to change the `parameterTypeRef` of the selected
+    /// `TmParameter`.  No-op if the selected node is not a Parameter.
     fn start_change_type_ref(&mut self) {
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
@@ -2518,6 +2583,9 @@ impl App {
         });
     }
 
+    /// Open the picker overlay to set the base type / base container / base
+    /// MetaCommand for the selected node.  The `PickerPurpose` is inferred from
+    /// the node kind; no-op for unsupported node types.
     fn start_set_base(&mut self) {
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
@@ -2604,6 +2672,8 @@ impl App {
         ps.cursor = 0;
     }
 
+    /// Apply the currently highlighted picker selection to the model, close the
+    /// overlay, and trigger validation and a tree rebuild.
     fn commit_picker(&mut self) {
         let Some(ps) = self.picker_state.take() else { return };
         let q = ps.filter.to_lowercase();
@@ -2690,6 +2760,8 @@ impl App {
         }
     }
 
+    /// Toggle the `signed` flag on the selected `IntegerParameterType` or
+    /// `IntegerArgumentType`.
     fn toggle_signed(&mut self) {
         use xtce_core::model::telemetry::ParameterType;
         use xtce_core::model::command::ArgumentType;
@@ -2725,6 +2797,7 @@ impl App {
         }
     }
 
+    /// Toggle the `abstract` flag on the selected `SequenceContainer` or `MetaCommand`.
     fn toggle_abstract(&mut self) {
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
@@ -2758,6 +2831,8 @@ impl App {
         }
     }
 
+    /// Cycle the `dataSource` of the selected `TmParameter` through all five
+    /// `DataSource` variants (Telemetered → Derived → Constant → Local → Ground).
     fn cycle_data_source(&mut self) {
         use xtce_core::model::telemetry::{DataSource, ParameterProperties};
         if self.focus != Focus::Tree { return; }
@@ -2786,6 +2861,7 @@ impl App {
         }
     }
 
+    /// Toggle the `readOnly` flag on the selected `TmParameter`.
     fn toggle_read_only(&mut self) {
         use xtce_core::model::telemetry::ParameterProperties;
         if self.focus != Focus::Tree { return; }
@@ -2810,6 +2886,10 @@ impl App {
 
     // ── Restriction criteria editor ───────────────────────────────────────────
 
+    /// Open the restriction criteria editor for the selected `SequenceContainer`.
+    ///
+    /// The container must already have a `base_container`.  If it does not, the
+    /// action is a no-op.
     fn start_restriction_edit(&mut self) {
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
@@ -2967,6 +3047,9 @@ impl App {
 
     // ── Entry location editor ─────────────────────────────────────────────────
 
+    /// Open the entry location editor for the selected `SequenceContainer`.
+    ///
+    /// No-op if the container has no entries.
     fn start_entry_location(&mut self) {
         if self.focus != Focus::Tree { return; }
         let Some(node) = self.tree.get(self.cursor) else { return };
@@ -3086,6 +3169,10 @@ impl App {
 
     // ── Encoding wizard ───────────────────────────────────────────────────────
 
+    /// Open the encoding wizard for the selected Integer or Float type.
+    ///
+    /// Aggregate, Array, AbsoluteTime, and RelativeTime parameter types are not
+    /// supported and result in a no-op.
     fn start_encoding(&mut self) {
         use xtce_core::model::telemetry::ParameterType;
         use xtce_core::model::command::ArgumentType;
@@ -3399,6 +3486,7 @@ impl App {
 
     // ── Unit editor ──────────────────────────────────────────────────────────
 
+    /// Open the unit editor for the selected ParameterType or ArgumentType.
     fn start_unit_edit(&mut self) {
         use xtce_core::model::telemetry::ParameterType;
         use xtce_core::model::command::ArgumentType;
@@ -3540,6 +3628,10 @@ impl App {
 
     // ── Calibrator editor ─────────────────────────────────────────────────────
 
+    /// Open the calibrator editor for the selected Integer or Float type.
+    ///
+    /// The type must already have a `DataEncoding` child; types without one are
+    /// silently ignored.
     fn start_calibrator_edit(&mut self) {
         use xtce_core::model::types::Calibrator;
         use xtce_core::model::telemetry::ParameterType;
@@ -3890,6 +3982,8 @@ pub(crate) fn float_size_labels() -> &'static [&'static str] {
     &["32-bit (F32)", "64-bit (F64)", "128-bit (F128)"]
 }
 
+/// Map a selector-cursor index (matching `integer_encoding_labels()`) to
+/// the corresponding `IntegerEncoding` variant.
 fn cursor_to_integer_encoding(cursor: usize) -> xtce_core::model::types::IntegerEncoding {
     use xtce_core::model::types::IntegerEncoding;
     match cursor {
@@ -3902,6 +3996,8 @@ fn cursor_to_integer_encoding(cursor: usize) -> xtce_core::model::types::Integer
     }
 }
 
+/// Map a selector-cursor index (matching `float_size_labels()`) to the
+/// corresponding `FloatSizeInBits` variant.
 fn cursor_to_float_size(cursor: usize) -> xtce_core::model::types::FloatSizeInBits {
     use xtce_core::model::types::FloatSizeInBits;
     match cursor {
@@ -3935,6 +4031,9 @@ fn filtered_count(items: &[(String, String)], filter: &str) -> usize {
     }
 }
 
+/// Construct a new `ParameterType` of variant `v` with the given name.
+///
+/// `type_ref` is only used for `Array` variants; other variants ignore it.
 fn make_parameter_type(
     v: TypeVariant,
     name: &str,
@@ -3953,6 +4052,9 @@ fn make_parameter_type(
     }
 }
 
+/// Construct a new `ArgumentType` of variant `v` with the given name.
+///
+/// `type_ref` is only used for `Array` variants; other variants ignore it.
 fn make_argument_type(
     v: TypeVariant,
     name: &str,
@@ -3982,6 +4084,7 @@ fn error_location_to_node_id(e: &ValidationError) -> Option<NodeId> {
     Some(location_to_node_id(loc))
 }
 
+/// Convert an [`ErrorLocation`] to the corresponding [`NodeId`] variant.
 fn location_to_node_id(loc: &ErrorLocation) -> NodeId {
     match loc.item_kind {
         ErrorItemKind::Container    => NodeId::TmContainer(loc.ss_path.clone(), loc.item_name.clone()),

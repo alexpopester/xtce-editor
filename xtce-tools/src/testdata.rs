@@ -54,6 +54,7 @@ pub fn generate_pcap(leaves: &[LeafContainer], port: u16) -> Vec<u8> {
 // PCAP global header  (24 bytes, little-endian)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Write the 24-byte libpcap global header (magic number, version, link type).
 fn write_pcap_global_header(buf: &mut Vec<u8>) {
     buf.extend_from_slice(&0xa1b2c3d4_u32.to_le_bytes()); // magic
     buf.extend_from_slice(&2_u16.to_le_bytes()); // version major
@@ -68,6 +69,9 @@ fn write_pcap_global_header(buf: &mut Vec<u8>) {
 // Ethernet + IPv4 + UDP framing
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Wrap `payload` in Ethernet II + IPv4 + UDP headers and append both the
+/// pcap per-packet record header and the full frame to `buf`.
+/// `seq` is used as a fake timestamp and IP identification field.
 fn write_pcap_packet(buf: &mut Vec<u8>, payload: &[u8], dst_port: u16, seq: u32) {
     // Build the full frame bottom-up so we know sizes.
     let udp_len = (8 + payload.len()) as u16;
@@ -120,6 +124,7 @@ fn write_pcap_packet(buf: &mut Vec<u8>, payload: &[u8], dst_port: u16, seq: u32)
     buf.extend_from_slice(&frame);
 }
 
+/// Compute the one's-complement checksum of a 20-byte IPv4 header.
 fn ipv4_checksum(header: &[u8]) -> u16 {
     let mut sum: u32 = 0;
     for chunk in header.chunks(2) {
@@ -153,6 +158,12 @@ fn build_payload(lc: &LeafContainer) -> Vec<u8> {
     buf
 }
 
+/// Write a deterministic synthetic value for `field` into the byte buffer.
+///
+/// Values are chosen to be recognisable in Wireshark without being all-zeros:
+/// signed integers use `1`, unsigned use half of their maximum value, floats
+/// use `1.5`, enums use the first declared enumeration value, strings use
+/// repeated `'A'`, and binary/unknown fields use `0xAB`.
 fn write_field_value(buf: &mut Vec<u8>, field: &FieldLayout) {
     match &field.type_info {
         TypeInfo::Integer { signed, size_in_bits, .. } => {

@@ -90,6 +90,11 @@ pub fn build_tree(root: &SpaceSystem, expanded: &HashSet<NodeId>) -> Vec<TreeNod
     nodes
 }
 
+/// Recursively append visible [`TreeNode`]s for `ss` and its expanded
+/// children to `out`.
+///
+/// Only children of nodes that are in `expanded` are appended; collapsed
+/// subtrees contribute their root row but nothing below it.
 fn add_space_system(
     ss: &SpaceSystem,
     ss_path: SsPath,
@@ -309,6 +314,8 @@ pub fn enumerate_all_nodes(root: &SpaceSystem) -> Vec<(NodeId, String)> {
     out
 }
 
+/// Recursively append every `(NodeId, label)` pair in `ss` and its
+/// descendants to `out`, regardless of expansion state.
 fn enum_ss(ss: &SpaceSystem, path: SsPath, out: &mut Vec<(NodeId, String)>) {
     out.push((NodeId::SpaceSystem(path.clone()), ss.name.clone()));
 
@@ -377,6 +384,7 @@ pub fn get_ss<'a>(root: &'a SpaceSystem, path: &[String]) -> Option<&'a SpaceSys
 // Display helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Return the display name for a `ParameterType` variant (e.g. `"Integer"`).
 fn pt_kind(pt: &ParameterType) -> &'static str {
     match pt {
         ParameterType::Integer(_)      => "Integer",
@@ -392,6 +400,7 @@ fn pt_kind(pt: &ParameterType) -> &'static str {
     }
 }
 
+/// Return the display name for an `ArgumentType` variant (e.g. `"Integer"`).
 fn at_kind(at: &ArgumentType) -> &'static str {
     match at {
         ArgumentType::Integer(_) => "Integer",

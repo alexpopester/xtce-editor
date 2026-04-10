@@ -214,6 +214,8 @@ fn proto_field_call(abbrev: &str, label: &str, ti: &TypeInfo) -> String {
     }
 }
 
+/// Format a Lua table literal mapping integer values to string labels for
+/// use as the fourth argument to `ProtoField.<type>(...)`.
 fn build_enum_table(values: &[ValueEnumeration]) -> String {
     let mut t = String::from("{");
     for (i, v) in values.iter().enumerate() {

@@ -42,6 +42,15 @@ pub struct Parameter {
 }
 
 impl Parameter {
+    /// Create a new `Parameter` with the given name and type reference.
+    ///
+    /// All other fields are set to their defaults (`None` / empty).
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The parameter name, unique within its SpaceSystem scope.
+    /// * `parameter_type_ref` - Name of the `ParameterType` that describes this
+    ///   parameter's encoding and engineering units.
     pub fn new(name: impl Into<String>, parameter_type_ref: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -88,6 +97,7 @@ pub enum ParameterType {
 }
 
 impl ParameterType {
+    /// Return the name of the parameter type, regardless of variant.
     pub fn name(&self) -> &str {
         match self {
             ParameterType::Integer(t)      => &t.name,
@@ -103,6 +113,7 @@ impl ParameterType {
         }
     }
 
+    /// Set the name of the parameter type in-place, regardless of variant.
     pub fn set_name(&mut self, name: String) {
         match self {
             ParameterType::Integer(t)      => t.name = name,
@@ -118,6 +129,7 @@ impl ParameterType {
         }
     }
 
+    /// Return the short description of the parameter type, if set.
     pub fn short_description(&self) -> Option<&str> {
         match self {
             ParameterType::Integer(t)      => t.short_description.as_deref(),
@@ -133,6 +145,7 @@ impl ParameterType {
         }
     }
 
+    /// Set or clear the short description of the parameter type.
     pub fn set_short_description(&mut self, desc: Option<String>) {
         match self {
             ParameterType::Integer(t)      => t.short_description = desc,
@@ -148,6 +161,7 @@ impl ParameterType {
         }
     }
 
+    /// Set or clear the `baseType` inheritance reference for the parameter type.
     pub fn set_base_type(&mut self, base: Option<String>) {
         match self {
             ParameterType::Integer(t)      => t.base_type = base,
@@ -163,6 +177,10 @@ impl ParameterType {
         }
     }
 
+    /// Return a mutable reference to the unit set of the parameter type.
+    ///
+    /// Used by the TUI unit editor to modify units in-place without needing to
+    /// know the concrete variant.
     pub fn unit_set_mut(&mut self) -> &mut Vec<crate::model::types::Unit> {
         match self {
             ParameterType::Integer(t)      => &mut t.unit_set,
@@ -194,6 +212,8 @@ pub struct ParameterTypeBase {
 }
 
 impl ParameterTypeBase {
+    /// Create a new `ParameterTypeBase` with the given name and all optional
+    /// fields set to their defaults (empty / `None`).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -224,6 +244,8 @@ pub struct IntegerParameterType {
 }
 
 impl IntegerParameterType {
+    /// Create a new `IntegerParameterType` with the given name and all optional
+    /// fields at their defaults (`signed = true`, no encoding, no constraints).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -271,6 +293,8 @@ pub struct FloatParameterType {
 }
 
 impl FloatParameterType {
+    /// Create a new `FloatParameterType` with the given name and all optional
+    /// fields at their defaults (no encoding, no valid range, no calibrator).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -307,6 +331,8 @@ pub struct EnumeratedParameterType {
 }
 
 impl EnumeratedParameterType {
+    /// Create a new `EnumeratedParameterType` with the given name, no encoding,
+    /// and an empty enumeration list.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -337,6 +363,8 @@ pub struct BooleanParameterType {
 }
 
 impl BooleanParameterType {
+    /// Create a new `BooleanParameterType` with the given name and all optional
+    /// fields at their defaults (no encoding, no string labels for true/false).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -364,6 +392,8 @@ pub struct StringParameterType {
 }
 
 impl StringParameterType {
+    /// Create a new `StringParameterType` with the given name and all optional
+    /// fields at their defaults (no string data encoding).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -389,6 +419,8 @@ pub struct BinaryParameterType {
 }
 
 impl BinaryParameterType {
+    /// Create a new `BinaryParameterType` with the given name and all optional
+    /// fields at their defaults (no binary data encoding).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -415,6 +447,8 @@ pub struct AggregateParameterType {
 }
 
 impl AggregateParameterType {
+    /// Create a new `AggregateParameterType` with the given name and an empty
+    /// member list.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -451,6 +485,13 @@ pub struct ArrayParameterType {
 }
 
 impl ArrayParameterType {
+    /// Create a new `ArrayParameterType` with the given name and element-type
+    /// reference, defaulting to one dimension.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The type name, unique within its SpaceSystem scope.
+    /// * `array_type_ref` - Name of the `ParameterType` for each element.
     pub fn new(name: impl Into<String>, array_type_ref: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -484,6 +525,8 @@ pub struct AbsoluteTimeParameterType {
 }
 
 impl AbsoluteTimeParameterType {
+    /// Create a new `AbsoluteTimeParameterType` with the given name and all
+    /// optional fields at their defaults (no encoding, no epoch reference).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -512,6 +555,8 @@ pub struct RelativeTimeParameterType {
 }
 
 impl RelativeTimeParameterType {
+    /// Create a new `RelativeTimeParameterType` with the given name and all
+    /// optional fields at their defaults (no encoding).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),

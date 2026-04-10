@@ -40,6 +40,9 @@ pub struct MetaCommand {
 }
 
 impl MetaCommand {
+    /// Create a new `MetaCommand` with the given name and all optional fields
+    /// at their defaults (`abstract = false`, no base command, empty argument
+    /// list and no command container).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -66,6 +69,13 @@ pub struct Argument {
 }
 
 impl Argument {
+    /// Create a new `Argument` with the given name and type reference.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The argument name, unique within its MetaCommand.
+    /// * `argument_type_ref` - Name of the `ArgumentType` that describes this
+    ///   argument's encoding and valid range.
     pub fn new(name: impl Into<String>, argument_type_ref: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -129,6 +139,7 @@ pub enum ArgumentType {
 }
 
 impl ArgumentType {
+    /// Return the name of the argument type, regardless of variant.
     pub fn name(&self) -> &str {
         match self {
             ArgumentType::Integer(t) => &t.name,
@@ -142,6 +153,7 @@ impl ArgumentType {
         }
     }
 
+    /// Set the name of the argument type in-place, regardless of variant.
     pub fn set_name(&mut self, name: String) {
         match self {
             ArgumentType::Integer(t) => t.name = name,
@@ -155,6 +167,7 @@ impl ArgumentType {
         }
     }
 
+    /// Return the short description of the argument type, if set.
     pub fn short_description(&self) -> Option<&str> {
         match self {
             ArgumentType::Integer(t) => t.short_description.as_deref(),
@@ -168,6 +181,7 @@ impl ArgumentType {
         }
     }
 
+    /// Set or clear the short description of the argument type.
     pub fn set_short_description(&mut self, desc: Option<String>) {
         match self {
             ArgumentType::Integer(t) => t.short_description = desc,
@@ -181,6 +195,7 @@ impl ArgumentType {
         }
     }
 
+    /// Set or clear the `baseType` inheritance reference for the argument type.
     pub fn set_base_type(&mut self, base: Option<String>) {
         match self {
             ArgumentType::Integer(t) => t.base_type = base,
@@ -194,6 +209,7 @@ impl ArgumentType {
         }
     }
 
+    /// Return a mutable reference to the unit set of the argument type.
     pub fn unit_set_mut(&mut self) -> &mut Vec<crate::model::types::Unit> {
         match self {
             ArgumentType::Integer(t)    => &mut t.unit_set,
@@ -223,6 +239,8 @@ pub struct IntegerArgumentType {
 }
 
 impl IntegerArgumentType {
+    /// Create a new `IntegerArgumentType` with the given name and all optional
+    /// fields at their defaults (`signed = true`, no encoding, no constraints).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -258,6 +276,8 @@ pub struct FloatArgumentType {
 }
 
 impl FloatArgumentType {
+    /// Create a new `FloatArgumentType` with the given name and all optional
+    /// fields at their defaults (no encoding, no valid range).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -285,6 +305,8 @@ pub struct EnumeratedArgumentType {
 }
 
 impl EnumeratedArgumentType {
+    /// Create a new `EnumeratedArgumentType` with the given name, no encoding,
+    /// and an empty enumeration list.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -312,6 +334,8 @@ pub struct BooleanArgumentType {
 }
 
 impl BooleanArgumentType {
+    /// Create a new `BooleanArgumentType` with the given name and all optional
+    /// fields at their defaults (no encoding, no string labels for true/false).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -338,6 +362,8 @@ pub struct StringArgumentType {
 }
 
 impl StringArgumentType {
+    /// Create a new `StringArgumentType` with the given name and all optional
+    /// fields at their defaults (no string data encoding).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -363,6 +389,8 @@ pub struct BinaryArgumentType {
 }
 
 impl BinaryArgumentType {
+    /// Create a new `BinaryArgumentType` with the given name and all optional
+    /// fields at their defaults (no binary data encoding).
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -387,6 +415,8 @@ pub struct AggregateArgumentType {
 }
 
 impl AggregateArgumentType {
+    /// Create a new `AggregateArgumentType` with the given name and an empty
+    /// member list.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -418,6 +448,13 @@ pub struct ArrayArgumentType {
 }
 
 impl ArrayArgumentType {
+    /// Create a new `ArrayArgumentType` with the given name and element-type
+    /// reference, defaulting to one dimension.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - The type name, unique within its SpaceSystem scope.
+    /// * `array_type_ref` - Name of the `ArgumentType` for each element.
     pub fn new(name: impl Into<String>, array_type_ref: impl Into<String>) -> Self {
         Self {
             name: name.into(),

@@ -478,6 +478,10 @@ pub(crate) fn write_parameter_type_set<'a>(
     Ok(())
 }
 
+/// Serialize an `<IntegerParameterType>` element.
+///
+/// Uses an empty element when there are no children (no long description,
+/// no aliases, no units, and no encoding); otherwise uses a Start/End pair.
 fn write_integer_parameter_type(w: &mut W, t: &IntegerParameterType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("IntegerParameterType");
     e.push_attribute(("name", t.name.as_str()));
@@ -514,6 +518,7 @@ fn write_integer_parameter_type(w: &mut W, t: &IntegerParameterType) -> Result<(
     Ok(())
 }
 
+/// Serialize a `<FloatParameterType>` element (empty when no children).
 fn write_float_parameter_type(w: &mut W, t: &FloatParameterType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("FloatParameterType");
     e.push_attribute(("name", t.name.as_str()));
@@ -549,6 +554,10 @@ fn write_float_parameter_type(w: &mut W, t: &FloatParameterType) -> Result<(), P
     Ok(())
 }
 
+/// Serialize an `<EnumeratedParameterType>` element.
+///
+/// Always emits a Start/End pair because the `<EnumerationList>` child is
+/// required for the type to be useful.
 fn write_enumerated_parameter_type(
     w: &mut W,
     t: &EnumeratedParameterType,
@@ -577,6 +586,7 @@ fn write_enumerated_parameter_type(
     Ok(())
 }
 
+/// Serialize an `<EnumerationList>` element containing `<Enumeration>` children.
 fn write_enumeration_list(w: &mut W, list: &[ValueEnumeration]) -> Result<(), ParseError> {
     w.write_event(Event::Start(BytesStart::new("EnumerationList")))?;
     for ve in list {
@@ -597,6 +607,7 @@ fn write_enumeration_list(w: &mut W, list: &[ValueEnumeration]) -> Result<(), Pa
     Ok(())
 }
 
+/// Serialize a `<BooleanParameterType>` element (empty when no children).
 fn write_boolean_parameter_type(w: &mut W, t: &BooleanParameterType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("BooleanParameterType");
     e.push_attribute(("name", t.name.as_str()));
@@ -634,6 +645,7 @@ fn write_boolean_parameter_type(w: &mut W, t: &BooleanParameterType) -> Result<(
     Ok(())
 }
 
+/// Serialize a `<StringParameterType>` element (empty when no children).
 fn write_string_parameter_type(w: &mut W, t: &StringParameterType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("StringParameterType");
     e.push_attribute(("name", t.name.as_str()));
@@ -665,6 +677,7 @@ fn write_string_parameter_type(w: &mut W, t: &StringParameterType) -> Result<(),
     Ok(())
 }
 
+/// Serialize a `<BinaryParameterType>` element (empty when no children).
 fn write_binary_parameter_type(w: &mut W, t: &BinaryParameterType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("BinaryParameterType");
     e.push_attribute(("name", t.name.as_str()));
@@ -696,6 +709,7 @@ fn write_binary_parameter_type(w: &mut W, t: &BinaryParameterType) -> Result<(),
     Ok(())
 }
 
+/// Serialize an `<AggregateParameterType>` element with its `<MemberList>`.
 fn write_aggregate_parameter_type(
     w: &mut W,
     t: &AggregateParameterType,
@@ -731,6 +745,7 @@ fn write_aggregate_parameter_type(
     Ok(())
 }
 
+/// Serialize an `<ArrayParameterType>` element (always an empty element — no children).
 fn write_array_parameter_type(w: &mut W, t: &ArrayParameterType) -> Result<(), ParseError> {
     let dims_s = t.number_of_dimensions.to_string();
     let mut e = BytesStart::new("ArrayParameterType");
@@ -747,6 +762,7 @@ fn write_array_parameter_type(w: &mut W, t: &ArrayParameterType) -> Result<(), P
     Ok(())
 }
 
+/// Serialize an `<AbsoluteTimeParameterType>` element (empty when no children).
 fn write_absolute_time_parameter_type(
     w: &mut W,
     t: &AbsoluteTimeParameterType,
@@ -791,6 +807,7 @@ fn write_absolute_time_parameter_type(
     Ok(())
 }
 
+/// Serialize a `<RelativeTimeParameterType>` element (empty when no children).
 fn write_relative_time_parameter_type(
     w: &mut W,
     t: &RelativeTimeParameterType,
@@ -833,6 +850,7 @@ fn write_relative_time_parameter_type(
 // T4 — ParameterSet
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Serialize a `<ParameterSet>` element containing all parameter definitions.
 fn write_parameter_set<'a>(
     w: &mut W,
     params: impl Iterator<Item = &'a Parameter>,
@@ -886,6 +904,7 @@ fn data_source_str(ds: &crate::model::telemetry::DataSource) -> &'static str {
 // T5 — ContainerSet (SequenceContainer + entry list + restriction criteria)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Serialize a `<ContainerSet>` element containing all sequence containers.
 fn write_container_set<'a>(
     w: &mut W,
     containers: impl Iterator<Item = &'a SequenceContainer>,
@@ -898,6 +917,8 @@ fn write_container_set<'a>(
     Ok(())
 }
 
+/// Serialize a single `<SequenceContainer>` element with its entry list and
+/// optional base-container reference.
 fn write_sequence_container(w: &mut W, c: &SequenceContainer) -> Result<(), ParseError> {
     let mut e = BytesStart::new("SequenceContainer");
     e.push_attribute(("name", c.name.as_str()));
@@ -920,6 +941,10 @@ fn write_sequence_container(w: &mut W, c: &SequenceContainer) -> Result<(), Pars
     Ok(())
 }
 
+/// Serialize a `<BaseContainer>` element.
+///
+/// Uses an empty element when there are no restriction criteria; otherwise
+/// writes the full Start/children/End form.
 fn write_base_container(w: &mut W, bc: &BaseContainer) -> Result<(), ParseError> {
     let mut e = BytesStart::new("BaseContainer");
     e.push_attribute(("containerRef", bc.container_ref.as_str()));
@@ -933,6 +958,7 @@ fn write_base_container(w: &mut W, bc: &BaseContainer) -> Result<(), ParseError>
     Ok(())
 }
 
+/// Serialize a `<RestrictionCriteria>` wrapper and its inner condition variant.
 fn write_restriction_criteria(w: &mut W, rc: &RestrictionCriteria) -> Result<(), ParseError> {
     w.write_event(Event::Start(BytesStart::new("RestrictionCriteria")))?;
     match rc {
@@ -957,6 +983,9 @@ fn write_restriction_criteria(w: &mut W, rc: &RestrictionCriteria) -> Result<(),
     Ok(())
 }
 
+/// Serialize a `MatchCriteria` under a caller-supplied element name (e.g.
+/// `"IncludeCondition"`), allowing the same logic to be reused for different
+/// wrapper elements.
 fn write_match_criteria(w: &mut W, tag: &str, mc: &MatchCriteria) -> Result<(), ParseError> {
     w.write_event(Event::Start(BytesStart::new(tag.to_owned())))?;
     match mc {
@@ -976,6 +1005,8 @@ fn write_match_criteria(w: &mut W, tag: &str, mc: &MatchCriteria) -> Result<(), 
     Ok(())
 }
 
+/// Serialize a single comparison using the supplied element name (e.g.
+/// `"Comparison"` or `"Condition"`).
 fn write_comparison(w: &mut W, tag: &str, cmp: &Comparison) -> Result<(), ParseError> {
     let mut e = BytesStart::new(tag.to_owned());
     e.push_attribute(("parameterRef", cmp.parameter_ref.as_str()));
@@ -1005,6 +1036,9 @@ fn write_boolean_expression_wrapper(
     Ok(())
 }
 
+/// Recursively serialize the inner nodes of a boolean expression tree.
+///
+/// `BooleanExpression::Not` has no XTCE counterpart and is silently skipped.
 fn write_boolean_expression_inner(w: &mut W, expr: &BooleanExpression) -> Result<(), ParseError> {
     match expr {
         BooleanExpression::Condition(cmp) => write_comparison(w, "Condition", cmp)?,
@@ -1028,6 +1062,7 @@ fn write_boolean_expression_inner(w: &mut W, expr: &BooleanExpression) -> Result
     Ok(())
 }
 
+/// Serialize an `<EntryList>` element and all its contained entries.
 fn write_entry_list(w: &mut W, entries: &[SequenceEntry]) -> Result<(), ParseError> {
     w.write_event(Event::Start(BytesStart::new("EntryList")))?;
     for entry in entries {
@@ -1089,6 +1124,7 @@ fn write_entry_list(w: &mut W, entries: &[SequenceEntry]) -> Result<(), ParseErr
     Ok(())
 }
 
+/// Serialize a `<FixedValueEntry>` (padding/constant bits in a container).
 fn write_seq_fixed_value_entry(
     w: &mut W,
     e: &crate::model::container::FixedValueEntry,
@@ -1109,6 +1145,7 @@ fn write_seq_fixed_value_entry(
     Ok(())
 }
 
+/// Serialize a `<LocationInContainerInBits>` element for a container entry.
 fn write_entry_location(w: &mut W, loc: &EntryLocation) -> Result<(), ParseError> {
     let ref_loc = match loc.reference_location {
         ReferenceLocation::ContainerStart => "containerStart",
@@ -1126,6 +1163,9 @@ fn write_entry_location(w: &mut W, loc: &EntryLocation) -> Result<(), ParseError
 // T6 — CommandMetaData (ArgumentTypeSet + MetaCommandSet)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Serialize a `<CommandMetaData>` element.
+///
+/// No-ops when there are no argument types, meta-commands, or command containers.
 fn write_command_meta_data(w: &mut W, cm: &CommandMetaData) -> Result<(), ParseError> {
     let has_content = !cm.argument_types.is_empty()
         || !cm.meta_commands.is_empty()
@@ -1151,6 +1191,7 @@ fn write_command_meta_data(w: &mut W, cm: &CommandMetaData) -> Result<(), ParseE
     Ok(())
 }
 
+/// Serialize an `<ArgumentTypeSet>` element containing all argument type variants.
 fn write_argument_type_set<'a>(
     w: &mut W,
     types: impl Iterator<Item = &'a ArgumentType>,
@@ -1172,6 +1213,7 @@ fn write_argument_type_set<'a>(
     Ok(())
 }
 
+/// Serialize an `<IntegerArgumentType>` element (empty when no children).
 fn write_integer_argument_type(w: &mut W, t: &IntegerArgumentType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("IntegerArgumentType");
     e.push_attribute(("name", t.name.as_str()));
@@ -1206,6 +1248,7 @@ fn write_integer_argument_type(w: &mut W, t: &IntegerArgumentType) -> Result<(),
     Ok(())
 }
 
+/// Serialize a `<FloatArgumentType>` element (empty when no children).
 fn write_float_argument_type(w: &mut W, t: &FloatArgumentType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("FloatArgumentType");
     e.push_attribute(("name", t.name.as_str()));
@@ -1239,6 +1282,7 @@ fn write_float_argument_type(w: &mut W, t: &FloatArgumentType) -> Result<(), Par
     Ok(())
 }
 
+/// Serialize an `<EnumeratedArgumentType>` element with its `<EnumerationList>`.
 fn write_enumerated_argument_type(
     w: &mut W,
     t: &EnumeratedArgumentType,
@@ -1267,6 +1311,7 @@ fn write_enumerated_argument_type(
     Ok(())
 }
 
+/// Serialize a `<BooleanArgumentType>` element (empty when no children).
 fn write_boolean_argument_type(w: &mut W, t: &BooleanArgumentType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("BooleanArgumentType");
     e.push_attribute(("name", t.name.as_str()));
@@ -1298,6 +1343,7 @@ fn write_boolean_argument_type(w: &mut W, t: &BooleanArgumentType) -> Result<(),
     Ok(())
 }
 
+/// Serialize a `<StringArgumentType>` element (empty when no children).
 fn write_string_argument_type(w: &mut W, t: &StringArgumentType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("StringArgumentType");
     e.push_attribute(("name", t.name.as_str()));
@@ -1326,6 +1372,7 @@ fn write_string_argument_type(w: &mut W, t: &StringArgumentType) -> Result<(), P
     Ok(())
 }
 
+/// Serialize a `<BinaryArgumentType>` element (empty when no children).
 fn write_binary_argument_type(w: &mut W, t: &BinaryArgumentType) -> Result<(), ParseError> {
     let mut e = BytesStart::new("BinaryArgumentType");
     e.push_attribute(("name", t.name.as_str()));
@@ -1354,6 +1401,7 @@ fn write_binary_argument_type(w: &mut W, t: &BinaryArgumentType) -> Result<(), P
     Ok(())
 }
 
+/// Serialize an `<AggregateArgumentType>` element with its `<MemberList>`.
 fn write_aggregate_argument_type(
     w: &mut W,
     t: &AggregateArgumentType,
@@ -1386,6 +1434,7 @@ fn write_aggregate_argument_type(
     Ok(())
 }
 
+/// Serialize an `<ArrayArgumentType>` element (always an empty element).
 fn write_array_argument_type(w: &mut W, t: &ArrayArgumentType) -> Result<(), ParseError> {
     let dims_s = t.number_of_dimensions.to_string();
     let mut e = BytesStart::new("ArrayArgumentType");
@@ -1402,6 +1451,7 @@ fn write_array_argument_type(w: &mut W, t: &ArrayArgumentType) -> Result<(), Par
     Ok(())
 }
 
+/// Serialize a `<MetaCommandSet>` element containing all meta-commands.
 fn write_meta_command_set<'a>(
     w: &mut W,
     commands: impl Iterator<Item = &'a MetaCommand>,
@@ -1414,6 +1464,8 @@ fn write_meta_command_set<'a>(
     Ok(())
 }
 
+/// Serialize a single `<MetaCommand>` element with its argument list and
+/// optional inline `<CommandContainer>`.
 fn write_meta_command(w: &mut W, mc: &MetaCommand) -> Result<(), ParseError> {
     let mut e = BytesStart::new("MetaCommand");
     e.push_attribute(("name", mc.name.as_str()));
@@ -1454,6 +1506,8 @@ fn write_meta_command(w: &mut W, mc: &MetaCommand) -> Result<(), ParseError> {
     Ok(())
 }
 
+/// Serialize a `<CommandContainer>` element with its entry list and optional
+/// base-container reference.
 fn write_command_container(w: &mut W, cc: &CommandContainer) -> Result<(), ParseError> {
     let mut e = BytesStart::new("CommandContainer");
     e.push_attribute(("name", cc.name.as_str()));
@@ -1466,6 +1520,8 @@ fn write_command_container(w: &mut W, cc: &CommandContainer) -> Result<(), Parse
     Ok(())
 }
 
+/// Serialize an `<EntryList>` for a command container, handling the three
+/// `CommandEntry` variants: `ArgumentRef`, `ParameterRef`, and `FixedValue`.
 fn write_command_entry_list(w: &mut W, entries: &[CommandEntry]) -> Result<(), ParseError> {
     w.write_event(Event::Start(BytesStart::new("EntryList")))?;
     for entry in entries {
@@ -1513,6 +1569,7 @@ fn write_command_entry_list(w: &mut W, entries: &[CommandEntry]) -> Result<(), P
     Ok(())
 }
 
+/// Serialize an `<ArgumentRefEntry>` (empty when no location is set).
 fn write_argument_ref_entry(w: &mut W, e: &ArgumentRefEntry) -> Result<(), ParseError> {
     let mut el = BytesStart::new("ArgumentRefEntry");
     el.push_attribute(("argumentRef", e.argument_ref.as_str()));

@@ -110,6 +110,12 @@ impl<'a> Scope<'a> {
 // Top-level recursive driver
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Validate a single `SpaceSystem` node, then recurse into its children.
+///
+/// `parent_scope` carries all names visible from ancestor SpaceSystems.
+/// `all_containers` is the pre-collected global container name set used to
+/// allow cross-SpaceSystem base-container references without false positives.
+/// `ss_path` is the ancestry path used to populate [`ErrorLocation`] values.
 fn validate_space_system(
     ss: &SpaceSystem,
     parent_scope: &Scope<'_>,
@@ -254,6 +260,7 @@ fn check_duplicate_names(
 // Telemetry validation
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Validate all parameter types, parameters, and containers in `tm`.
 fn validate_telemetry(
     tm: &TelemetryMetaData,
     ss_name: &str,
@@ -283,6 +290,10 @@ fn validate_telemetry(
     }
 }
 
+/// Validate the cross-references within a single `ParameterType`.
+///
+/// Checks the optional `base_type` reference and any variant-specific refs
+/// (e.g., `arrayTypeRef`, aggregate member `typeRef`).
 fn validate_parameter_type(
     pt: &ParameterType,
     name: &str,
@@ -336,6 +347,8 @@ fn validate_parameter_type(
     }
 }
 
+/// Validate the base-container reference and entry-list references within a
+/// single `SequenceContainer`.
 fn validate_sequence_container(
     container: &SequenceContainer,
     name: &str,
@@ -444,6 +457,10 @@ fn is_qualified_ref(s: &str) -> bool {
 // Command validation
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Validate the cross-references within a single `ArgumentType`.
+///
+/// Mirrors `validate_parameter_type` for the command side: checks `base_type`,
+/// aggregate member `typeRef`, and `arrayTypeRef`.
 fn validate_argument_type(
     at: &ArgumentType,
     name: &str,
@@ -495,6 +512,8 @@ fn validate_argument_type(
     }
 }
 
+/// Validate the references within a single `MetaCommand`: base command,
+/// argument types, and the inline CommandContainer's base container.
 fn validate_meta_command(
     mc: &MetaCommand,
     ss_name: &str,
@@ -565,6 +584,7 @@ fn validate_meta_command(
 // Restriction criteria and comparison reference checks
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Recursively validate all parameter references inside `RestrictionCriteria`.
 fn check_restriction_criteria(
     rc: &RestrictionCriteria,
     container_name: &str,
@@ -600,6 +620,8 @@ fn check_restriction_criteria(
     }
 }
 
+/// Recursively validate all parameter references inside `MatchCriteria`
+/// (used for entry `include_condition`s).
 fn check_match_criteria(
     mc: &MatchCriteria,
     container_name: &str,
@@ -622,6 +644,7 @@ fn check_match_criteria(
     }
 }
 
+/// Validate the `parameter_ref` inside a single `Comparison`.
 fn check_comparison(
     cmp: &Comparison,
     container_name: &str,
@@ -641,6 +664,7 @@ fn check_comparison(
     }
 }
 
+/// Recursively validate all `Comparison` leaves inside a `BooleanExpression`.
 fn check_boolean_expression(
     expr: &BooleanExpression,
     container_name: &str,
@@ -781,6 +805,7 @@ fn detect_cycles_in_map(
 // Accessor helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Extract the optional `base_type` reference from any `ParameterType` variant.
 fn pt_base_type(pt: &ParameterType) -> Option<&str> {
     match pt {
         ParameterType::Integer(t) => t.base_type.as_deref(),
@@ -796,6 +821,7 @@ fn pt_base_type(pt: &ParameterType) -> Option<&str> {
     }
 }
 
+/// Extract the optional `base_type` reference from any `ArgumentType` variant.
 fn at_base_type(at: &ArgumentType) -> Option<&str> {
     match at {
         ArgumentType::Integer(t) => t.base_type.as_deref(),

@@ -24,6 +24,19 @@ use crate::{ParseError, SpaceSystem, XtceError};
 use context::ParseContext;
 
 /// Parse an XTCE document from a byte slice.
+///
+/// # Errors
+///
+/// Returns a [`ParseError`] if the input is not well-formed XML, if a required
+/// attribute is absent, or if an unexpected element is encountered.
+///
+/// # Examples
+///
+/// ```
+/// let xml = br#"<SpaceSystem name="Root"/>"#;
+/// let ss = xtce_core::parser::parse(xml).unwrap();
+/// assert_eq!(ss.name, "Root");
+/// ```
 pub fn parse(input: &[u8]) -> Result<SpaceSystem, ParseError> {
     let reader = NsReader::from_reader(input);
     let mut ctx = ParseContext::new(reader);
@@ -34,6 +47,11 @@ pub fn parse(input: &[u8]) -> Result<SpaceSystem, ParseError> {
 ///
 /// Streams directly from disk via a `BufReader` rather than loading the
 /// entire file into memory first.
+///
+/// # Errors
+///
+/// Returns [`XtceError::Io`] if the file cannot be opened, or
+/// [`XtceError::Parse`] for any XML or XTCE structural error.
 pub fn parse_file(path: &std::path::Path) -> Result<SpaceSystem, XtceError> {
     let file = std::fs::File::open(path)?;
     let reader = NsReader::from_reader(std::io::BufReader::new(file));

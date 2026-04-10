@@ -567,6 +567,12 @@ fn resolve_parameter_type<'a>(
     find_ancestor_type(type_ref, root, &local_ss.name)
 }
 
+/// Recursively search ancestor SpaceSystems (those that contain `target_name`
+/// in their subtree) for a ParameterType named `type_ref`.
+///
+/// Returns `None` when `ss` IS `target_name` (we've reached the local scope,
+/// which is handled by the caller) or when `ss` does not contain `target_name`
+/// as a descendant.
 fn find_ancestor_type<'a>(
     type_ref: &str,
     ss: &'a SpaceSystem,
@@ -594,6 +600,7 @@ fn find_ancestor_type<'a>(
     None
 }
 
+/// Return true if `ss` or any of its descendants is named `name`.
 fn subtree_contains(ss: &SpaceSystem, name: &str) -> bool {
     ss.name == name || ss.sub_systems.iter().any(|c| subtree_contains(c, name))
 }
@@ -874,6 +881,11 @@ fn detail_sequence_container(
     lines
 }
 
+/// Return a display label and optional bit-width for a single container entry.
+///
+/// The label includes any explicit location annotation; the bit-width is
+/// `None` for entries whose size cannot be statically resolved (e.g.
+/// `ContainerRef` and `ArrayParameterRef`).
 fn entry_label_and_bits(
     entry: &SequenceEntry,
     ss: &SpaceSystem,
@@ -957,6 +969,10 @@ fn collect_inheritance_chain(
     layers
 }
 
+/// Return the encoded size in bits for a `ParameterType`, if statically known.
+///
+/// Returns `None` for aggregate, array, and time types, and for variable-length
+/// string and binary encodings.
 fn parameter_type_bits(pt: &ParameterType) -> Option<u32> {
     match pt {
         ParameterType::Integer(t) => t.encoding.as_ref().map(|e| e.size_in_bits),
@@ -1359,6 +1375,7 @@ fn fmt_comparison(c: &Comparison) -> String {
     format!("{} {} {}", c.parameter_ref, op, c.value)
 }
 
+/// Convert a `FloatSizeInBits` variant to its numeric bit-count.
 fn float_bits(size: &FloatSizeInBits) -> Option<u32> {
     Some(match size {
         FloatSizeInBits::F32 => 32,
@@ -1371,14 +1388,17 @@ fn float_bits(size: &FloatSizeInBits) -> Option<u32> {
 // Line / span builder helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A bold section-header line.
 fn heading(text: impl Into<String>) -> Line<'static> {
     Line::from(Span::styled(text.into(), theme::section_header()))
 }
 
+/// A dimmer sub-section label line.
 fn subheading(text: impl Into<String>) -> Line<'static> {
     Line::from(Span::styled(text.into(), theme::group_node()))
 }
 
+/// A horizontal separator line.
 fn sep() -> Line<'static> {
     Line::from(Span::styled(
         "─".repeat(50),
@@ -1386,10 +1406,12 @@ fn sep() -> Line<'static> {
     ))
 }
 
+/// An empty line (vertical spacing).
 fn blank() -> Line<'static> {
     Line::from("")
 }
 
+/// A two-column label/value line, left-padded to 22 characters.
 fn field(label: impl Into<String>, value: impl Into<String>) -> Line<'static> {
     Line::from(vec![
         Span::styled(format!("{:<22}", label.into()), theme::detail_label()),
@@ -1397,10 +1419,15 @@ fn field(label: impl Into<String>, value: impl Into<String>) -> Line<'static> {
     ])
 }
 
+/// A dimmed informational line (e.g. keyboard hints, empty-state messages).
 fn note(text: impl Into<String>) -> Line<'static> {
     Line::from(Span::styled(text.into(), theme::dim()))
 }
 
+/// Format an entry name with an optional location annotation.
+///
+/// Uses `@<n>b` for `ContainerStart` locations and `+<n>b` for
+/// `PreviousEntry` locations (e.g. `"APID @0b"` or `"SeqCount +8b"`).
 fn fmt_entry_label(name: &str, loc: Option<&xtce_core::model::container::EntryLocation>) -> String {
     match loc {
         None => name.to_string(),
@@ -1415,6 +1442,10 @@ fn fmt_entry_label(name: &str, loc: Option<&xtce_core::model::container::EntryLo
     }
 }
 
+/// Append a `Units:` field row and an edit hint to `lines`.
+///
+/// No-ops on the units row if the slice is empty, but always appends the
+/// keyboard hint.
 fn push_units(lines: &mut Vec<Line<'static>>, units: &[Unit]) {
     if !units.is_empty() {
         let s = units.iter().map(|u| u.value.as_str()).collect::<Vec<_>>().join(", ");
