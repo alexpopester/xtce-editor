@@ -1,3 +1,19 @@
+//! `xtce-tools` — command-line utilities for XTCE files.
+//!
+//! # Subcommands
+//!
+//! - **`gen-dissector`** — Generates a Wireshark Lua dissector that decodes
+//!   UDP packets matching the leaf containers defined in the XTCE file.
+//!   See [`dissector`].
+//!
+//! - **`gen-testdata`** — Generates a PCAP file with one synthetic UDP packet
+//!   per leaf container, useful for testing the generated Lua dissector.
+//!   See [`testdata`].
+//!
+//! Both subcommands share the container-flattening pipeline in [`layout`],
+//! which resolves inheritance chains and computes absolute bit offsets for
+//! every parameter field.
+
 mod dissector;
 mod layout;
 mod testdata;

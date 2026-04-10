@@ -99,6 +99,12 @@ impl CreateKind {
 }
 
 /// Which step of the multi-step create flow is active.
+///
+/// State machine transitions:
+/// - `ParameterType` / `ArgumentType`: `TypeVariantSelect` → `NamePrompt` →
+///   `PickerPrompt` (type ref for Array; skipped for other variants) → commit.
+/// - All other kinds: `NamePrompt` → `PickerPrompt` (type ref for
+///   `Parameter`/`Argument`) → commit.
 #[derive(Debug, Clone)]
 pub enum CreateStep {
     /// Choose one of the 8 type variants (ParameterType / ArgumentType only).
@@ -117,6 +123,11 @@ pub enum CreateStep {
 }
 
 /// Which step of the entry-add flow is active.
+///
+/// State machine transitions:
+/// - Container: `ContainerTypeSelect` → `ParameterPicker` | `ContainerPicker`
+///   | `FixedValueSizePrompt` → commit.
+/// - MetaCommand: `ContainerTypeSelect` → `ArgumentPicker` → commit.
 #[derive(Debug, Clone)]
 pub enum EntryAddStep {
     /// Choose entry type: ParameterRef / ContainerRef / FixedValue (containers only).
@@ -132,6 +143,9 @@ pub enum EntryAddStep {
 }
 
 /// State for the entry-add flow.
+///
+/// Active while adding a new entry to a container or MetaCommand entry list.
+/// The `step` field drives which overlay is shown and how input is interpreted.
 #[derive(Debug, Clone)]
 pub struct EntryAddState {
     /// The container or MetaCommand whose entry list is being edited.
@@ -140,87 +154,161 @@ pub struct EntryAddState {
 }
 
 /// All state needed to drive the add-item wizard.
+///
+/// Active while a new XTCE item (ParameterType, Parameter, Container, etc.) is
+/// being created.  The `step` field progresses through the creation stages;
+/// on `CreateConfirm` at the final step, the item is inserted into the model.
 #[derive(Debug, Clone)]
 pub struct CreateState {
+    /// What kind of item is being created.
     pub kind: CreateKind,
+    /// The SpaceSystem path under which the new item will be inserted.
     pub target_path: SsPath,
+    /// Name carried forward from `NamePrompt` into later steps.
     pub target_name: Option<String>,
     pub step: CreateStep,
 }
 
 /// Pending single-key delete confirmation.
+///
+/// Active after `DeleteStart` until the user presses `y` (confirm) or `n` /
+/// `Esc` (cancel).
 #[derive(Debug, Clone)]
 pub struct DeleteConfirmState {
+    /// The node to be deleted.
     pub node_id: NodeId,
+    /// Human-readable name shown in the confirmation prompt.
     pub name: String,
 }
 
 // ── Picker state (ChangeTypeRef / SetBase) ────────────────────────────────
 
+/// What a generic picker overlay is being used for.
+///
+/// The picker shows a filterable list of names.  The purpose determines which
+/// names are listed and what field is updated on confirm.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerPurpose {
+    /// Change the `parameterTypeRef` of a Parameter.
     ChangeTypeRef,
+    /// Set the `base_type` of a ParameterType or ArgumentType.
     SetBaseType,
+    /// Set the `base_container` of a SequenceContainer.
     SetBaseContainer,
+    /// Set the `base_meta_command` of a MetaCommand.
     SetBaseMetaCommand,
 }
 
+/// State for the generic single-step picker overlay (ChangeTypeRef / SetBase).
+///
+/// Opened by `ChangeTypeRefStart` or `SetBaseStart`.  Shows a filterable list
+/// of candidate names; on `PickerConfirm` the selected name is written back to
+/// the model field indicated by `purpose`.
 pub struct PickerState {
     pub purpose: PickerPurpose,
+    /// The node whose field is being changed.
     pub node_id: NodeId,
+    /// Current text in the filter input.
     pub filter: String,
+    /// `(display_label, value_string)` pairs.  Display includes type
+    /// annotations; value is the bare name written to the model.
     pub items: Vec<(String, String)>,
+    /// Index of the currently highlighted item.
     pub cursor: usize,
 }
 
 // ── Encoding wizard state ─────────────────────────────────────────────────
 
+/// Which step of the encoding wizard is active.
+///
+/// State machine transitions:
+/// - Integer: `IntegerFormatSelect` → `IntegerSizePrompt` → commit.
+/// - Float: `FloatSizeSelect` → commit (format is always IEEE 754).
 #[derive(Debug, Clone)]
 pub enum EncodingStep {
+    /// Choose the integer encoding format (unsigned, twosComplement, etc.).
     IntegerFormatSelect { cursor: usize },
+    /// Enter the size in bits for an integer encoding.
     IntegerSizePrompt { format_cursor: usize, buffer: String },
+    /// Choose the float size (32 / 64 / 128 bits).
     FloatSizeSelect { cursor: usize },
 }
 
+/// State for the encoding wizard.
+///
+/// Active while setting or replacing the `DataEncoding` child of a
+/// ParameterType or ArgumentType.  Only Integer and Float types are supported
+/// by the wizard; other types retain their existing encoding unchanged.
 #[derive(Debug, Clone)]
 pub struct EncodingState {
+    /// The type node whose encoding is being set.
     pub node_id: NodeId,
     pub step: EncodingStep,
 }
 
 // ── Enumeration entry editing state ───────────────────────────────────────
 
+/// Which step of the enumeration entry editor is active.
+///
+/// State machine transitions: `ValuePrompt` → `LabelPrompt` → commit.
+/// The numeric value is captured first, then the string label.
 #[derive(Debug, Clone)]
 pub enum EnumEntryStep {
+    /// Enter the integer value for the new enumeration entry.
     ValuePrompt { buffer: String },
+    /// Enter the string label for the new enumeration entry.
+    ///
+    /// `value` carries the integer captured in `ValuePrompt`.
     LabelPrompt { value: i64, buffer: String },
 }
 
+/// State for the enumeration entry editor.
+///
+/// Active while adding a new `(value, label)` pair to an `EnumeratedParameterType`
+/// or `EnumeratedArgumentType`.
 #[derive(Debug, Clone)]
 pub struct EnumEntryState {
+    /// The enumerated type node being edited.
     pub node_id: NodeId,
     pub step: EnumEntryStep,
 }
 
 // ── Entry location editing state ──────────────────────────────────────────────
 
+/// Which step of the entry location editor is active.
+///
+/// State machine transitions: `PickEntry` → `EnterOffset` → commit.
 #[derive(Debug, Clone)]
 pub enum EntryLocationStep {
     /// Pick which entry in the list to set a location on.
+    ///
     /// `items` is `(display_label, entry_index_string)`.
     PickEntry { items: Vec<(String, String)>, cursor: usize },
-    /// Enter the bit offset (integer, may be negative).
+    /// Enter the bit offset for the chosen entry.
+    ///
+    /// The offset may be negative (relative to `PreviousEntry`) and is
+    /// parsed as `i64` before being stored in the model.
     EnterOffset { entry_index: usize, entry_name: String, buffer: String },
 }
 
+/// State for the entry location editor.
+///
+/// Active while setting the `location` attribute on an entry inside a
+/// `SequenceContainer`.  The location specifies the bit offset of the field
+/// relative to the container start or the previous entry.
 #[derive(Debug, Clone)]
 pub struct EntryLocationState {
+    /// The container node whose entry is being edited.
     pub node_id: NodeId,
     pub step: EntryLocationStep,
 }
 
 // ── Restriction criteria editing state ────────────────────────────────────────
 
+/// Human-readable labels for comparison operators, indexed by cursor position.
+///
+/// Used by both the restriction editor UI and `apply_action` to convert the
+/// cursor index back to a `ComparisonOperator`.
 pub const RESTRICTION_OPERATOR_LABELS: &[&str] = &[
     "== (Equal)",
     "!= (Not equal)",
@@ -230,16 +318,30 @@ pub const RESTRICTION_OPERATOR_LABELS: &[&str] = &[
     ">= (Greater or equal)",
 ];
 
+/// Which step of the restriction criteria editor is active.
+///
+/// State machine transitions:
+/// `PickParameter` → `PickOperator` → `EnterValue` → commit.
+///
+/// On commit, a `Comparison` restriction criterion is written to the
+/// `base_container.restriction_criteria` field of the container.
 #[derive(Debug, Clone)]
 pub enum RestrictionEditStep {
-    /// Pick the parameter to compare against.
+    /// Pick the parameter whose value will be compared.
     PickParameter { filter: String, items: Vec<(String, String)>, cursor: usize },
-    /// Pick the comparison operator.
+    /// Pick the comparison operator (==, !=, <, <=, >, >=).
     PickOperator { parameter_ref: String, cursor: usize },
-    /// Enter the comparison value (free text).
+    /// Enter the constant value to compare against.
     EnterValue { parameter_ref: String, operator_cursor: usize, buffer: String },
 }
 
+/// State for the restriction criteria editor.
+///
+/// Active while setting or replacing the `RestrictionCriteria` on a
+/// `SequenceContainer` that has a base container.  Only `Comparison` criteria
+/// (single parameter equality/inequality against a constant) are supported by
+/// the editor; more complex criteria (ComparisonList, BooleanExpression) are
+/// preserved on round-trip but cannot be edited here.
 #[derive(Debug, Clone)]
 pub struct RestrictionEditState {
     /// The SequenceContainer being edited.
@@ -249,44 +351,78 @@ pub struct RestrictionEditState {
 
 // ── Unit editor state ─────────────────────────────────────────────────────────
 
+/// Which step of the unit editor is active.
+///
+/// State machine transitions:
+/// - `Review` is the initial state. From here:
+///   - `a` → `AddUnit`, where the user types a unit string.
+///   - `d` removes the last unit and stays in `Review`.
+///   - `Enter` / `Esc` commits the working copy and closes.
+/// - `AddUnit` → back to `Review` on `Enter` (appends to working copy)
+///   or `Esc` (discards the in-progress unit without closing the editor).
 #[derive(Debug, Clone)]
 pub enum UnitEditStep {
     /// Show current units; `a` to add, `d` to remove last, Enter/Esc to close.
     Review,
-    /// Buffer for the new unit value string.
+    /// Buffer for the new unit value string being typed.
     AddUnit { buffer: String },
 }
 
+/// State for the unit set editor.
+///
+/// Holds a working copy of the unit list that is only written to the model
+/// when the editor is closed with `Enter` or `UnitEditConfirm`.  `Esc`
+/// discards the working copy.
 #[derive(Debug, Clone)]
 pub struct UnitEditState {
+    /// The ParameterType or ArgumentType node whose units are being edited.
     pub node_id: NodeId,
-    /// Working copy of the units being edited.  Applied to the model on `Confirm`.
+    /// Working copy of the unit list.  Mutations here do not touch the model
+    /// until `unit_edit_confirm` is called.
     pub units: Vec<xtce_core::model::types::Unit>,
     pub step: UnitEditStep,
 }
 
 // ── Calibrator editor state ──────────────────────────────────────────────────
 
+/// Human-readable labels for calibrator kinds, indexed by cursor position.
 pub const CALIBRATOR_KIND_LABELS: &[&str] = &["None", "Polynomial", "Spline"];
 
+/// Which step of the calibrator editor is active.
+///
+/// State machine transitions:
+/// - `KindSelect` (choose None / Polynomial / Spline):
+///   - None → commit immediately (clears the calibrator).
+///   - Polynomial → `PolynomialReview`.
+///   - Spline → `SplineReview`.
+/// - `PolynomialReview`: `a` → `PolynomialAddCoeff` → back to `PolynomialReview`.
+///   `Enter` / `Esc` → commit.
+/// - `SplineReview`: `a` → `SplineAddRaw` → `SplineAddCal` → back to
+///   `SplineReview`.  `Enter` / `Esc` → commit.
 #[derive(Debug, Clone)]
 pub enum CalibratorStep {
     /// Choose calibrator kind: None / Polynomial / Spline.
     KindSelect { cursor: usize },
-    /// Review / edit polynomial coefficients (a₀, a₁, …).
+    /// Review / edit the polynomial coefficient list (a₀, a₁, …).
     PolynomialReview { coefficients: Vec<f64> },
-    /// Enter a new coefficient value.
+    /// Enter a new polynomial coefficient value.
     PolynomialAddCoeff { buffer: String, coefficients: Vec<f64> },
-    /// Review / edit spline points.
+    /// Review / edit the spline point list.
     SplineReview { points: Vec<xtce_core::model::types::SplinePoint>, order: u32, extrapolate: bool },
-    /// Enter the raw value for a new spline point.
+    /// Enter the raw (pre-calibration) value for a new spline point.
     SplineAddRaw { buffer: String, points: Vec<xtce_core::model::types::SplinePoint>, order: u32, extrapolate: bool },
-    /// Enter the calibrated value for a new spline point (raw is already captured).
+    /// Enter the calibrated value for a new spline point (raw already captured).
     SplineAddCal { raw: f64, buffer: String, points: Vec<xtce_core::model::types::SplinePoint>, order: u32, extrapolate: bool },
 }
 
+/// State for the calibrator editor.
+///
+/// Active while setting or replacing the `DefaultCalibrator` child of an
+/// `IntegerDataEncoding` or `FloatDataEncoding`.  The working copy lives in
+/// the `CalibratorStep` variants and is only written to the model on commit.
 #[derive(Debug, Clone)]
 pub struct CalibratorState {
+    /// The Integer or Float ParameterType/ArgumentType node being edited.
     pub node_id: NodeId,
     pub step: CalibratorStep,
 }

@@ -104,30 +104,56 @@ cargo run -p xtce-tui -- path/to/file.xml
 - Validation errors are shown in an overlay (`e`).
 - A keybinding help overlay is available (`?`).
 
-### Keybindings (normal mode)
+### Input modes
+
+The TUI has two top-level modes:
+
+- **Explore mode** (default) — navigation, search, reference following, file
+  operations. Read-only; no mutations.
+- **Edit mode** — entered with `m`, exposes all mutation operations. A
+  floating overlay shows the available operations for the selected node. `Esc`
+  returns to Explore.
+
+Interactive sub-flows (create wizard, encoding picker, restriction editor, etc.)
+are launched from Edit mode and use `Enter` to confirm and `Esc` to cancel.
+
+### Keybindings — Explore mode
 
 | Key | Action |
 |---|---|
 | `q` / `Ctrl-c` | Quit |
 | `↑` / `k`, `↓` / `j` | Move cursor |
-| `Ctrl-u` / `Ctrl-d` | Page up / down |
+| `Ctrl-u` / `PgUp`, `Ctrl-d` / `PgDn` | Page up / down |
 | `Enter` / `Space` | Toggle expand/collapse |
-| `→` / `l`, `←` / `h` | Expand / collapse |
-| `Tab` | Cycle panel focus |
+| `→` / `l`, `←` / `h` | Smart expand / collapse (or jump to parent) |
+| `Tab` | Cycle panel focus (tree ↔ detail) |
+| `f` | Follow reference (Parameter→Type, Type→users, Container→base) |
+| `[` | Go back (return from last reference follow) |
+| `/` | Open search prompt — type query, Enter to search |
+| `n` / `N` | Next / previous search match |
 | `s` / `Ctrl-w` | Save to disk |
-| `u` | Undo |
+| `u` | Undo last change |
 | `Ctrl-r` | Redo |
 | `r` | Reload from disk (prompts if unsaved changes) |
-| `/` | Enter search mode |
-| `n` / `N` | Next / previous search match |
-| `i` | Edit name (inline prompt) |
+| `m` | Enter Edit mode |
+| `e` | Toggle validation errors overlay |
+| `?` | Toggle keybinding help overlay |
+| `Esc` | Close active overlay |
+
+### Keybindings — Edit mode
+
+Press `m` to enter, `Esc` to return to Explore.  Navigation keys still work.
+
+| Key | Action |
+|---|---|
+| `i` | Rename selected item |
 | `C` | Edit short description |
 | `a` | Create new item (guided wizard) |
 | `d` | Delete selected item (with confirmation) |
 | `A` | Add entry to container or MetaCommand |
 | `x` | Remove last entry |
 | `t` | Change type reference (picker) |
-| `b` | Set base container / base command (picker) |
+| `b` | Set base container / type / MetaCommand (picker) |
 | `E` | Edit encoding (wizard) |
 | `S` | Toggle signed flag (Integer/Float types) |
 | `B` | Toggle abstract flag (containers / MetaCommands) |
@@ -138,12 +164,6 @@ cargo run -p xtce-tui -- path/to/file.xml
 | `L` | Edit entry location / bit offset |
 | `K` | Edit calibrator (polynomial or spline) |
 | `U` | Edit unit set |
-| `e` | Toggle validation errors overlay |
-| `?` | Toggle keybinding help overlay |
-| `Esc` | Close active overlay or cancel |
-
-Most interactive sub-modes (create, picker, encoding, etc.) use `Enter` to
-confirm and `Esc` to cancel, with arrow keys or `j`/`k` for navigation.
 
 ### Architecture notes
 
@@ -154,6 +174,9 @@ confirm and `Esc` to cancel, with arrow keys or `j`/`k` for navigation.
 - `ui/mod.rs` builds the `TreeNode` list from the model and delegates rendering
   to `tree.rs` (left panel) and `detail.rs` (right panel).
 - Undo/redo is implemented as a `VecDeque` of `SpaceSystem` snapshots.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed description of the
+internals of all three crates.
 
 ---
 
@@ -223,13 +246,10 @@ Optional runtime dependency: `xmllint` (part of `libxml2-utils` on Debian/Ubuntu
 
 ## Contributing / extending
 
-- **Adding a new XTCE element**: add the struct to `xtce-core/src/model/`, parse
-  it in the corresponding `xtce-core/src/parser/` file, serialize it in
-  `serializer.rs`, add validation rules to `validator.rs`, then expose it in the
-  TUI detail panel (`xtce-tui/src/ui/detail.rs`).
-- **Adding a new keybinding**: add a variant to `Action` in `event.rs`, map a
-  key in the appropriate `*_key_to_action` function, and handle it in
-  `App::apply_action`.
-- **Adding a new xtce-tools subcommand**: add a variant to `Commands` in
-  `xtce-tools/src/main.rs` and implement the logic in a new module under
-  `xtce-tools/src/`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for step-by-step guides on:
+
+- Adding a new XTCE element type (model → parser → serializer → validator → TUI)
+- Adding a new keybinding
+- Adding a new `xtce-tools` subcommand
+- Parser and serializer conventions
+- Testing expectations

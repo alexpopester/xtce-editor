@@ -1,7 +1,34 @@
 //! PCAP test-data generator.
 //!
-//! Produces one synthetic UDP packet per leaf container, wrapped in
-//! Ethernet II + IPv4 + UDP headers, encoded in standard libpcap format.
+//! Produces one synthetic UDP packet per leaf container, wrapped in standard
+//! Ethernet II + IPv4 + UDP headers, encoded in libpcap format (little-endian,
+//! link type 1 = Ethernet).
+//!
+//! # Packet structure
+//!
+//! ```text
+//! PCAP global header  (24 bytes)
+//! ── for each leaf container ──
+//!   PCAP packet record header  (16 bytes)
+//!   Ethernet II header         (14 bytes)
+//!   IPv4 header                (20 bytes, no options)
+//!   UDP header                 (8 bytes)
+//!   payload                    (ceil(container.total_bits / 8) bytes)
+//! ```
+//!
+//! # Payload generation
+//!
+//! Each field in the payload is filled with a deterministic pattern:
+//! `(field_index * 3) mod 256`, repeated to fill the field's bit width.
+//! This makes the values recognisable without being all-zeros, which aids
+//! visual inspection in Wireshark.
+//!
+//! # Limitations
+//!
+//! - Source/destination MAC and IP addresses are fixed synthetic values.
+//! - No IP checksum is computed (Wireshark accepts this for test files).
+//! - Dynamic-size fields (variable-length strings, arrays) are treated as
+//!   their maximum declared size.
 
 use crate::layout::{FieldLayout, LeafContainer, TypeInfo};
 

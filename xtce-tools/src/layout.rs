@@ -1,8 +1,39 @@
 //! Container flattening and bit-layout resolution.
 //!
 //! Takes a parsed `SpaceSystem` tree and produces a flat list of
-//! `LeafContainer` values, each carrying a fully-resolved list of
-//! `FieldLayout` entries with absolute bit offsets.
+//! [`LeafContainer`] values, each carrying a fully-resolved list of
+//! [`FieldLayout`] entries with absolute bit offsets.
+//!
+//! # Pipeline
+//!
+//! 1. **Index** (`SsIndex::build`): a single recursive walk of the
+//!    `SpaceSystem` tree collects every container, parameter, and parameter
+//!    type into flat `HashMap` lookup tables.
+//!
+//! 2. **Leaf detection** (`find_leaf_containers`): a container is a _leaf_ if
+//!    it is not abstract and no other container declares it as its
+//!    `base_container`.  The set of non-leaf containers is computed in a single
+//!    pass.
+//!
+//! 3. **Field flattening** (`collect_entries`): for each leaf, recursively
+//!    follows the `base_container` chain (base entries come first), then appends
+//!    the container's own entries.  `ContainerRef` entries inline the referenced
+//!    container's fields at the appropriate position.  A `visited` set prevents
+//!    infinite recursion on cycles.
+//!
+//! 4. **Offset computation** (`compute_offsets`): a sequential pass assigns
+//!    absolute bit offsets.  Fields with no explicit location are packed
+//!    sequentially.  `ContainerStart` locations are absolute from byte 0 of the
+//!    payload; `PreviousEntry` locations are relative to the end of the
+//!    preceding field.
+//!
+//! # Limitations
+//!
+//! - `ArrayParameterRef` entries are skipped because element counts are dynamic
+//!   and not stored in the model.  A warning is printed to stderr.
+//! - Aggregate types are emitted as `TypeInfo::Unknown` with a 32-bit default.
+//! - Cross-SpaceSystem container references are resolved via the flat index,
+//!   so they work as long as the referenced container name is unique globally.
 
 use std::collections::{HashMap, HashSet};
 

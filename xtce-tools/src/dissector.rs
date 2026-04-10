@@ -1,4 +1,23 @@
 //! Wireshark Lua dissector generator.
+//!
+//! Produces a self-contained `.lua` script that registers a Wireshark
+//! protocol dissector for UDP traffic.  The dissector decodes packets by
+//! matching them against the leaf containers found in the XTCE document.
+//!
+//! # Dispatch strategy
+//!
+//! If every leaf container has a single-parameter equality discriminator
+//! (e.g. all share an `APID` field with a distinct required value), the
+//! generated dissector builds a dispatch table keyed on that value and calls
+//! the appropriate per-container `dissect_<Name>` function.  Otherwise it
+//! emits all fields of all containers without dispatch (useful for simple
+//! single-packet-type documents).
+//!
+//! # Limitations
+//!
+//! - Only `ParameterRef` entries are decoded; `ContainerRef` and `FixedValue`
+//!   padding fields are skipped in the output (but their offsets are tracked).
+//! - Aggregate and Array parameter types are emitted as `Unknown` fields.
 
 use crate::layout::{FieldLayout, LeafContainer, TypeInfo};
 use xtce_core::model::types::ValueEnumeration;

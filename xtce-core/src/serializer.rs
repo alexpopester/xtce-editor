@@ -53,6 +53,10 @@ pub fn serialize(space_system: &SpaceSystem) -> Result<Vec<u8>, ParseError> {
 // T1 — Scaffold: SpaceSystem + Header
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Serialize a `<SpaceSystem>` element and all its children recursively.
+///
+/// `is_root` controls whether the XTCE namespace attribute is written.
+/// Only the root SpaceSystem carries the namespace; nested sub-systems inherit it.
 fn write_space_system(w: &mut W, ss: &SpaceSystem, is_root: bool) -> Result<(), ParseError> {
     let mut e = BytesStart::new("SpaceSystem");
     if is_root {
@@ -86,6 +90,10 @@ fn write_space_system(w: &mut W, ss: &SpaceSystem, is_root: bool) -> Result<(), 
     Ok(())
 }
 
+/// Serialize a `<Header>` element.
+///
+/// Writes an empty element when there are no child notes or authors,
+/// and a full Start/children/End block otherwise.
 fn write_header(w: &mut W, h: &Header) -> Result<(), ParseError> {
     let mut e = BytesStart::new("Header");
     if let Some(v) = &h.version {
@@ -132,6 +140,9 @@ fn write_header(w: &mut W, h: &Header) -> Result<(), ParseError> {
     Ok(())
 }
 
+/// Serialize an `<Author>` text element inside `<AuthorSet>`.
+///
+/// If the author has a role, the text is `"Name (Role)"`.
 fn write_author_info(w: &mut W, a: &AuthorInfo) -> Result<(), ParseError> {
     let text = match &a.role {
         Some(r) => format!("{} ({})", a.name, r),
@@ -201,6 +212,9 @@ fn byte_order_str(bo: &ByteOrder) -> &'static str {
 // T2 — UnitSet + AliasSet
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Serialize a `<UnitSet>` element containing zero or more `<Unit>` children.
+///
+/// No-ops silently when `units` is empty (the element is omitted entirely).
 pub(crate) fn write_unit_set(w: &mut W, units: &[Unit]) -> Result<(), ParseError> {
     if units.is_empty() {
         return Ok(());
@@ -226,6 +240,9 @@ pub(crate) fn write_unit_set(w: &mut W, units: &[Unit]) -> Result<(), ParseError
     Ok(())
 }
 
+/// Serialize an `<AliasSet>` element containing zero or more `<Alias>` children.
+///
+/// No-ops silently when `aliases` is empty.
 pub(crate) fn write_alias_set(w: &mut W, aliases: &[Alias]) -> Result<(), ParseError> {
     if aliases.is_empty() {
         return Ok(());
