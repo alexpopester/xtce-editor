@@ -173,19 +173,19 @@ pub fn lua_id(name: &str) -> String {
 fn proto_field_call(abbrev: &str, label: &str, ti: &TypeInfo) -> String {
     match ti {
         TypeInfo::Integer { signed, size_in_bits, .. } => {
-            let (pf_type, base) = match (signed, size_in_bits) {
-                (false, 8) => ("uint8", "base.DEC"),
-                (false, 16) => ("uint16", "base.DEC"),
-                (false, 32) => ("uint32", "base.DEC"),
-                (false, 64) => ("uint64", "base.DEC"),
-                (true, 8) => ("int8", "base.DEC"),
-                (true, 16) => ("int16", "base.DEC"),
-                (true, 32) => ("int32", "base.DEC"),
-                (true, 64) => ("int64", "base.DEC"),
-                (false, _) => ("uint32", "base.DEC"),
-                (true, _) => ("int32", "base.DEC"),
+            // Pick the smallest Wireshark integer type that fits the field's
+            // actual bit width so Wireshark accepts the TvbRange length.
+            let pf_type = match (*signed, *size_in_bits) {
+                (false, 1..=8) => "uint8",
+                (false, 9..=16) => "uint16",
+                (false, 17..=32) => "uint32",
+                (false, _) => "uint64",
+                (true, 1..=8) => "int8",
+                (true, 9..=16) => "int16",
+                (true, 17..=32) => "int32",
+                (true, _) => "int64",
             };
-            format!("ProtoField.{pf_type}(\"{abbrev}\", \"{label}\", {base})")
+            format!("ProtoField.{pf_type}(\"{abbrev}\", \"{label}\", base.DEC)")
         }
         TypeInfo::Float { size_in_bits, .. } => {
             let pf = if *size_in_bits == 64 { "double" } else { "float" };
@@ -291,8 +291,13 @@ fn emit_field_add(out: &mut String, container_id: &str, field: &FieldLayout) {
                 "    -- WARNING: {key} is little-endian but unaligned; decoded as big-endian\n"
             ));
         }
+        // Pass both the TvbRange (for highlight) and the extracted integer
+        // value.  Wireshark's tree:add(field, tvbrange) form reads bytes
+        // directly and would misinterpret a sub-byte field; the three-argument
+        // form tree:add(field, tvbrange, value) lets us supply the correct
+        // bitfield-extracted integer while still anchoring the highlight.
         out.push_str(&format!(
-            "    if buf:len() >= {} then tree:add(F[\"{key}\"], buf({byte_off}, {byte_span}):bitfield({bit_in_byte}, {size})) end\n",
+            "    if buf:len() >= {} then tree:add(F[\"{key}\"], buf({byte_off}, {byte_span}), buf({byte_off}, {byte_span}):bitfield({bit_in_byte}, {size})) end\n",
             byte_off + byte_span
         ));
     }
@@ -503,6 +508,107 @@ mod tests {
             "unaligned discriminator must use bitfield()");
         assert!(!lua.contains(":uint()"),
             "unaligned discriminator must not use uint()");
+    }
+
+    // ── Bug 2: tree:add for sub-byte fields must use 3-arg form ──────────────
+
+    /// Unaligned field add must pass both the TvbRange and the bitfield value.
+    /// The two-arg form `tree:add(field, tvbrange:bitfield(...))` is wrong
+    /// because bitfield() returns a number, not a TvbRange.
+    #[test]
+    fn test_unaligned_field_add_uses_tvbrange_and_value() {
+        // bit_offset=5, size=3 → byte_off=0, bit_in_byte=5, byte_span=1
+        let leaves = vec![make_leaf("Pkt", None, vec![unaligned_field("Val", 5, 3, false)])];
+        let lua = generate_lua(&leaves, 4321);
+        assert!(
+            lua.contains("tree:add(F[\"pkt.val\"], buf(0, 1), buf(0, 1):bitfield(5, 3))"),
+            "unaligned field must use tree:add(field, tvbrange, bitfield_value) — got:\n{lua}"
+        );
+    }
+
+    /// Byte-aligned fields must still use the two-arg form (no change).
+    #[test]
+    fn test_aligned_field_add_uses_two_arg_form() {
+        let leaves = vec![make_leaf("Pkt", None, vec![uint_field("Val", 0, 16, false)])];
+        let lua = generate_lua(&leaves, 4321);
+        // Two-arg form: tree:add(field, buf(off, len))
+        assert!(
+            lua.contains("tree:add(F[\"pkt.val\"], buf(0, 2))"),
+            "byte-aligned BE field must use two-arg tree:add"
+        );
+        // Must NOT use the three-arg form or bitfield for aligned fields.
+        assert!(
+            !lua.contains(":bitfield("),
+            "byte-aligned field must not use bitfield()"
+        );
+    }
+
+    // ── Bug 3: ProtoField type matches actual bit width ───────────────────────
+
+    /// An 11-bit field must produce uint16, not the old uint32 catch-all.
+    #[test]
+    fn test_proto_field_type_for_11bit_integer() {
+        let leaves = vec![make_leaf("Pkt", None, vec![unaligned_field("APID", 0, 11, false)])];
+        let lua = generate_lua(&leaves, 4321);
+        assert!(
+            lua.contains("ProtoField.uint16("),
+            "11-bit field must map to uint16 (fits in 2 bytes)"
+        );
+        assert!(
+            !lua.contains("ProtoField.uint32("),
+            "11-bit field must NOT map to uint32"
+        );
+    }
+
+    /// Exact-byte-width fields must still map to their natural type.
+    #[test]
+    fn test_proto_field_type_exact_widths() {
+        let leaves = vec![make_leaf("Pkt", None, vec![
+            uint_field("A", 0, 8, false),
+            uint_field("B", 8, 16, false),
+            uint_field("C", 24, 32, false),
+            uint_field("D", 56, 64, false),
+        ])];
+        let lua = generate_lua(&leaves, 4321);
+        assert!(lua.contains("ProtoField.uint8("),  "8-bit → uint8");
+        assert!(lua.contains("ProtoField.uint16("), "16-bit → uint16");
+        assert!(lua.contains("ProtoField.uint32("), "32-bit → uint32");
+        assert!(lua.contains("ProtoField.uint64("), "64-bit → uint64");
+    }
+
+    // ── S1: generated Lua must pass luac syntax check ─────────────────────────
+
+    /// If `luac` is available, the generated dissector must be syntactically
+    /// valid Lua.  The test is skipped gracefully when luac is not installed.
+    #[test]
+    fn test_generated_lua_passes_luac_syntax_check() {
+        let disc = uint_field("APID", 0, 16, false);
+        let leaves = vec![
+            make_leaf("PktA", Some(make_disc("APID", 100)), vec![disc.clone()]),
+            make_leaf("PktB", Some(make_disc("APID", 200)), vec![disc.clone()]),
+        ];
+        let lua = generate_lua(&leaves, 4321);
+
+        let tmp_path = std::env::temp_dir().join("xtce_test_dissector.lua");
+        std::fs::write(&tmp_path, lua.as_bytes()).expect("write temp lua file");
+
+        let result = std::process::Command::new("luac")
+            .args(["-p", tmp_path.to_str().unwrap()])
+            .output();
+
+        let _ = std::fs::remove_file(&tmp_path);
+
+        match result {
+            Ok(output) => assert!(
+                output.status.success(),
+                "luac reported a syntax error:\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("luac not found on PATH — skipping syntax check");
+            }
+            Err(e) => panic!("failed to run luac: {e}"),
+        }
     }
 }
 

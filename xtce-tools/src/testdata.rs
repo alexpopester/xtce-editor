@@ -30,7 +30,7 @@
 //! - Dynamic-size fields (variable-length strings, arrays) are treated as
 //!   their maximum declared size.
 
-use crate::layout::{FieldLayout, LeafContainer, TypeInfo};
+use crate::layout::{DiscriminatorInfo, FieldLayout, LeafContainer, TypeInfo};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public entry point
@@ -146,13 +146,15 @@ fn ipv4_checksum(header: &[u8]) -> u16 {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Build a synthetic payload byte buffer for the container.
-/// Each field is filled with a predictable mid-range value.
+/// Each field is filled with a predictable mid-range value, except the
+/// discriminator field which is filled with the discriminator value so the
+/// generated dissector's dispatch table can route the packet.
 fn build_payload(lc: &LeafContainer) -> Vec<u8> {
     let byte_count = ((lc.total_bits + 7) / 8).max(1) as usize;
     let mut buf = vec![0u8; byte_count];
 
     for field in &lc.fields {
-        write_field_value(&mut buf, field);
+        write_field_value(&mut buf, field, lc.discriminator.as_ref());
     }
 
     buf
@@ -160,11 +162,22 @@ fn build_payload(lc: &LeafContainer) -> Vec<u8> {
 
 /// Write a deterministic synthetic value for `field` into the byte buffer.
 ///
-/// Values are chosen to be recognisable in Wireshark without being all-zeros:
-/// signed integers use `1`, unsigned use half of their maximum value, floats
-/// use `1.5`, enums use the first declared enumeration value, strings use
-/// repeated `'A'`, and binary/unknown fields use `0xAB`.
-fn write_field_value(buf: &mut Vec<u8>, field: &FieldLayout) {
+/// If `discriminator` names this field, its value is written verbatim so the
+/// generated dissector's `XTCE_MAP` dispatch table can route the packet.
+/// Otherwise values are chosen to be recognisable in Wireshark without being
+/// all-zeros: signed integers use `1`, unsigned use half of their maximum
+/// value, floats use `1.5`, enums use the first declared enumeration value,
+/// strings use repeated `'A'`, and binary/unknown fields use `0xAB`.
+fn write_field_value(buf: &mut Vec<u8>, field: &FieldLayout, discriminator: Option<&DiscriminatorInfo>) {
+    // Discriminator field gets its exact required value so the dissector's
+    // dispatch table matches this packet.
+    if let Some(disc) = discriminator {
+        if field.name == disc.param_name {
+            write_bits(buf, field.bit_offset, field.type_info.size_in_bits(), disc.value as u64);
+            return;
+        }
+    }
+
     match &field.type_info {
         TypeInfo::Integer { signed, size_in_bits, .. } => {
             let val: u64 = if *signed {
@@ -180,7 +193,8 @@ fn write_field_value(buf: &mut Vec<u8>, field: &FieldLayout) {
             let val: u64 = if *size_in_bits == 64 {
                 1.5_f64.to_bits()
             } else {
-                (1.5_f32.to_bits() as u64) << 32
+                // Encode as big-endian IEEE 754 single — no shift needed.
+                1.5_f32.to_bits() as u64
             };
             write_bits(buf, field.bit_offset, *size_in_bits, val);
         }
@@ -244,5 +258,179 @@ fn write_bits(buf: &mut [u8], bit_offset: u32, bit_count: u32, value: u64) {
                 buf[byte_idx] &= !(1 << bit_in_byte);
             }
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::{DiscriminatorInfo, FieldLayout, LeafContainer, TypeInfo};
+
+    fn make_leaf(
+        name: &str,
+        discriminator: Option<DiscriminatorInfo>,
+        fields: Vec<FieldLayout>,
+    ) -> LeafContainer {
+        let total_bits = fields
+            .iter()
+            .map(|f| f.bit_offset + f.type_info.size_in_bits())
+            .max()
+            .unwrap_or(0);
+        LeafContainer {
+            name: name.to_string(),
+            full_path: format!("Root/{name}"),
+            discriminator,
+            fields,
+            total_bits,
+        }
+    }
+
+    /// Mimic Wireshark's `TvbRange:bitfield(position, length)`: extract
+    /// `count` bits starting at bit `bit_offset` from a big-endian byte
+    /// buffer, returning the MSB-first integer value.
+    fn extract_bitfield(buf: &[u8], bit_offset: u32, count: u32) -> u64 {
+        let mut result: u64 = 0;
+        for i in 0..count {
+            let src_bit = bit_offset + i;
+            let byte_idx = (src_bit / 8) as usize;
+            let bit_in_byte = 7 - (src_bit % 8);
+            if byte_idx < buf.len() {
+                let bit_val = (buf[byte_idx] >> bit_in_byte) & 1;
+                result = (result << 1) | (bit_val as u64);
+            }
+        }
+        result
+    }
+
+    // ── S4: discriminator value written to payload ────────────────────────────
+
+    /// The discriminator field in the generated payload must equal the
+    /// discriminator value so the dissector's XTCE_MAP dispatch table matches.
+    #[test]
+    fn test_discriminator_value_written_to_payload() {
+        // 11-bit APID at bit 0 with discriminator value 104
+        let lc = make_leaf(
+            "SystemStatusPacket",
+            Some(DiscriminatorInfo { param_name: "APID".to_string(), value: 104 }),
+            vec![FieldLayout {
+                name: "APID".to_string(),
+                type_info: TypeInfo::Integer {
+                    signed: false,
+                    size_in_bits: 11,
+                    byte_order_lsb: false,
+                },
+                bit_offset: 0,
+            }],
+        );
+
+        let payload = build_payload(&lc);
+        let decoded = extract_bitfield(&payload, 0, 11);
+        assert_eq!(decoded, 104, "APID field must contain discriminator value 104");
+    }
+
+    /// A second discriminator value to confirm the logic with a byte-aligned field.
+    #[test]
+    fn test_discriminator_value_byte_aligned() {
+        let lc = make_leaf(
+            "HkPacket",
+            Some(DiscriminatorInfo { param_name: "APID".to_string(), value: 200 }),
+            vec![FieldLayout {
+                name: "APID".to_string(),
+                type_info: TypeInfo::Integer {
+                    signed: false,
+                    size_in_bits: 16,
+                    byte_order_lsb: false,
+                },
+                bit_offset: 0,
+            }],
+        );
+
+        let payload = build_payload(&lc);
+        let decoded = u16::from_be_bytes([payload[0], payload[1]]) as u64;
+        assert_eq!(decoded, 200, "16-bit APID must contain discriminator value 200");
+    }
+
+    /// A non-discriminator field in the same container must keep its generic fill.
+    #[test]
+    fn test_non_discriminator_field_uses_generic_fill() {
+        let lc = make_leaf(
+            "HkPacket",
+            Some(DiscriminatorInfo { param_name: "APID".to_string(), value: 100 }),
+            vec![
+                FieldLayout {
+                    name: "APID".to_string(),
+                    type_info: TypeInfo::Integer {
+                        signed: false,
+                        size_in_bits: 16,
+                        byte_order_lsb: false,
+                    },
+                    bit_offset: 0,
+                },
+                FieldLayout {
+                    name: "SeqCount".to_string(),
+                    type_info: TypeInfo::Integer {
+                        signed: false,
+                        size_in_bits: 16,
+                        byte_order_lsb: false,
+                    },
+                    bit_offset: 16,
+                },
+            ],
+        );
+
+        let payload = build_payload(&lc);
+        // SeqCount (non-discriminator, 16-bit unsigned) should be half of 2^16 = 32768
+        let seq_count = u16::from_be_bytes([payload[2], payload[3]]) as u64;
+        assert_eq!(seq_count, (1_u64 << 16) / 2,
+            "non-discriminator field must use half-max fill");
+    }
+
+    // ── S5: float encoding correctness ────────────────────────────────────────
+
+    /// A 32-bit float field must encode 1.5 as its IEEE 754 bit pattern.
+    #[test]
+    fn test_float32_field_encodes_correctly() {
+        let lc = make_leaf(
+            "Pkt",
+            None,
+            vec![FieldLayout {
+                name: "Val".to_string(),
+                type_info: TypeInfo::Float { size_in_bits: 32, byte_order_lsb: false },
+                bit_offset: 0,
+            }],
+        );
+
+        let payload = build_payload(&lc);
+        assert_eq!(payload.len(), 4);
+        let bits = u32::from_be_bytes([payload[0], payload[1], payload[2], payload[3]]);
+        assert_eq!(bits, 1.5_f32.to_bits(),
+            "32-bit float must encode 1.5 (got 0x{bits:08X})");
+    }
+
+    /// A 64-bit float field must encode 1.5 as its IEEE 754 bit pattern.
+    #[test]
+    fn test_float64_field_encodes_correctly() {
+        let lc = make_leaf(
+            "Pkt",
+            None,
+            vec![FieldLayout {
+                name: "Val".to_string(),
+                type_info: TypeInfo::Float { size_in_bits: 64, byte_order_lsb: false },
+                bit_offset: 0,
+            }],
+        );
+
+        let payload = build_payload(&lc);
+        assert_eq!(payload.len(), 8);
+        let bits = u64::from_be_bytes([
+            payload[0], payload[1], payload[2], payload[3],
+            payload[4], payload[5], payload[6], payload[7],
+        ]);
+        assert_eq!(bits, 1.5_f64.to_bits(),
+            "64-bit float must encode 1.5 (got 0x{bits:016X})");
     }
 }

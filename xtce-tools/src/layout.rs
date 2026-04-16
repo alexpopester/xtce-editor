@@ -210,6 +210,11 @@ fn resolve_type_info(param_name: &str, idx: &SsIndex<'_>) -> TypeInfo {
                 Some(IntegerEncoding::TwosComplement)
                 | Some(IntegerEncoding::SignMagnitude)
                 | Some(IntegerEncoding::OnesComplement) => true,
+                // Unsigned, BCD, PackedBCD cannot represent negative values.
+                Some(IntegerEncoding::Unsigned)
+                | Some(IntegerEncoding::BCD)
+                | Some(IntegerEncoding::PackedBCD) => false,
+                // No encoding present — defer to the type's signed attribute.
                 _ => t.signed,
             };
             let lsb = enc
@@ -467,11 +472,16 @@ fn extract_discriminator(base: &BaseContainer) -> Option<DiscriminatorInfo> {
 pub fn find_leaf_containers(root: &SpaceSystem) -> Vec<LeafContainer> {
     let idx = SsIndex::build(root);
 
-    // Determine which containers are used as a base (non-leaf).
+    // Determine which containers are used as a base by another container
+    // (making them non-leaves).  Self-referential base declarations
+    // (container_ref == the container's own name) are skipped: they are a
+    // valid XTCE idiom for standalone packet formats and must remain leaves.
     let mut base_set: HashSet<&str> = HashSet::new();
-    for (_, container) in idx.containers.values() {
+    for (name, (_, container)) in &idx.containers {
         if let Some(bc) = &container.base_container {
-            base_set.insert(bc.container_ref.as_str());
+            if bc.container_ref != *name {
+                base_set.insert(bc.container_ref.as_str());
+            }
         }
     }
 
@@ -842,5 +852,117 @@ mod tests {
         // Sensor payload
         assert_eq!(fields[3].name, "Flux");             assert_eq!(fields[3].bit_offset, 48);
         assert_eq!(fields[4].name, "InstrumentStatus"); assert_eq!(fields[4].bit_offset, 80);
+    }
+
+    // ── Self-referential base containers ─────────────────────────────────────
+
+    /// A container whose base_container points to itself must be treated as a
+    /// leaf — the self-reference is a valid XTCE idiom for a standalone packet
+    /// format and does not make the container a "base" for other containers.
+    #[test]
+    fn test_self_referential_container_is_a_leaf() {
+        let mut pkt = SequenceContainer::new("SelfPkt");
+        // base_container.container_ref == pkt's own name
+        pkt.base_container = Some(BaseContainer {
+            container_ref: "SelfPkt".to_string(),
+            restriction_criteria: None,
+        });
+        pkt.entry_list = vec![param_ref("A"), param_ref("B")];
+
+        let ss = make_ss(
+            vec![uint_type("U8", 8)],
+            vec![param("A", "U8"), param("B", "U8")],
+            vec![("SelfPkt".to_string(), pkt)],
+        );
+
+        let leaves = find_leaf_containers(&ss);
+        assert_eq!(leaves.len(), 1, "self-referential container must appear as a leaf");
+        assert_eq!(leaves[0].name, "SelfPkt");
+    }
+
+    /// Fields in a self-referential container are collected normally (the
+    /// recursive base-chain walk hits the cycle guard and returns nothing extra,
+    /// so the container's own entry_list is the complete field list).
+    #[test]
+    fn test_self_referential_container_fields_collected() {
+        let mut pkt = SequenceContainer::new("SelfPkt");
+        pkt.base_container = Some(BaseContainer {
+            container_ref: "SelfPkt".to_string(),
+            restriction_criteria: None,
+        });
+        pkt.entry_list = vec![param_ref("A"), param_ref("B")];
+
+        let ss = make_ss(
+            vec![uint_type("U8", 8)],
+            vec![param("A", "U8"), param("B", "U8")],
+            vec![("SelfPkt".to_string(), pkt)],
+        );
+
+        let leaves = find_leaf_containers(&ss);
+        let fields = visible_fields(&leaves[0]);
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name, "A"); assert_eq!(fields[0].bit_offset, 0);
+        assert_eq!(fields[1].name, "B"); assert_eq!(fields[1].bit_offset, 8);
+    }
+
+    /// Discriminator on a self-referential base_container is extracted
+    /// correctly — the restriction criteria still carries the APID value.
+    #[test]
+    fn test_self_referential_container_discriminator_extracted() {
+        let mut pkt = SequenceContainer::new("SelfPkt");
+        pkt.base_container = Some(BaseContainer {
+            container_ref: "SelfPkt".to_string(),
+            restriction_criteria: Some(RestrictionCriteria::Comparison(
+                xtce_core::model::container::Comparison {
+                    parameter_ref: "APID".to_string(),
+                    comparison_operator: ComparisonOperator::Equality,
+                    value: "42".to_string(),
+                    use_calibrated_value: true,
+                },
+            )),
+        });
+        pkt.entry_list = vec![param_ref("APID"), param_ref("Data")];
+
+        let ss = make_ss(
+            vec![uint_type("U8", 8)],
+            vec![param("APID", "U8"), param("Data", "U8")],
+            vec![("SelfPkt".to_string(), pkt)],
+        );
+
+        let leaves = find_leaf_containers(&ss);
+        assert_eq!(leaves.len(), 1);
+        let disc = leaves[0].discriminator.as_ref()
+            .expect("self-referential container with restriction criteria must have a discriminator");
+        assert_eq!(disc.param_name, "APID");
+        assert_eq!(disc.value, 42);
+    }
+
+    /// A self-referential container is still excluded if another container
+    /// also lists it as its base (it genuinely is a base in that case).
+    #[test]
+    fn test_self_referential_base_excluded_when_also_used_by_child() {
+        let mut base = SequenceContainer::new("Base");
+        base.base_container = Some(BaseContainer {
+            container_ref: "Base".to_string(),
+            restriction_criteria: None,
+        });
+        base.entry_list = vec![param_ref("A")];
+
+        let mut child = SequenceContainer::new("Child");
+        child.base_container = Some(BaseContainer {
+            container_ref: "Base".to_string(),
+            restriction_criteria: None,
+        });
+        child.entry_list = vec![param_ref("B")];
+
+        let ss = make_ss(
+            vec![uint_type("U8", 8)],
+            vec![param("A", "U8"), param("B", "U8")],
+            vec![("Base".to_string(), base), ("Child".to_string(), child)],
+        );
+
+        let leaves = find_leaf_containers(&ss);
+        assert_eq!(leaves.len(), 1, "Base must not appear when Child also uses it");
+        assert_eq!(leaves[0].name, "Child");
     }
 }

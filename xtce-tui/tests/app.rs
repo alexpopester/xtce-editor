@@ -199,6 +199,8 @@ fn search_finds_parameter_by_name() {
     for c in "Voltage".chars() {
         app.apply_action(Action::SearchChar(c));
     }
+    // Search runs on commit (Enter), not live on each keystroke.
+    app.apply_action(Action::SearchCommit);
     assert!(!app.search_matches.is_empty());
 }
 
