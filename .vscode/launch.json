@@ -1,0 +1,108 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug executable 'xtce-tools'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=xtce-tools",
+                    "--package=xtce-tools",
+                    "--",
+                    "gen-dissector",
+                    "/home/apope/documents/personal_projects/test_claude/xtce-editor/test_data/advanced_mission.xml"
+                ]
+            },
+            "args": []
+        },
+        {
+            "name": "Debug unit tests in library 'xtce_core'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=xtce-core"
+                ]
+            }
+        },
+        {
+            "name": "Debug unit tests in library 'xtce_tui'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=xtce-tui"
+                ]
+            }
+        },
+        {
+            "name": "Debug executable 'xtce-tui'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=xtce-tui",
+                    "--package=xtce-tui"
+                ]
+            },
+            "args": []
+        },
+        {
+            "name": "Debug unit tests in executable 'xtce-tui'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--bin=xtce-tui",
+                    "--package=xtce-tui"
+                ]
+            }
+        },
+        {
+            "name": "Debug integration test 'app'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--test=app",
+                    "--package=xtce-tui"
+                ]
+            }
+        },
+        {
+            "name": "Debug executable 'xtce-tools'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=xtce-tools",
+                    "--package=xtce-tools"
+                ]
+            },
+            "args": []
+        },
+        {
+            "name": "Debug unit tests in executable 'xtce-tools'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--bin=xtce-tools",
+                    "--package=xtce-tools"
+                ]
+            }
+        }
+    ]
+}
