@@ -1,0 +1,1062 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  advanced_mission.xml — DemoSat comprehensive XTCE v1.2 test database.
+
+  Exercises:
+    - 9 leaf packet types (6 root-level, 1 in ADCS subsystem, 2 in Payload subsystem)
+    - All 10 ParameterType variants: Integer, Float, Enumerated, Boolean, String, Binary,
+      Aggregate, Array, AbsoluteTime, RelativeTime
+    - Polynomial and spline calibrators on integer data encodings
+    - Units with power and factor attributes
+    - Type inheritance via baseType attribute
+    - AliasSet on parameters
+    - ParameterProperties (dataSource, readOnly)
+    - LongDescription elements on types and parameters
+    - Signed integer encodings: twosComplement for INT8/INT16/INT32
+    - Float64 parameters
+    - Boolean with custom oneStringValue / zeroStringValue
+    - ComparisonList restriction criteria on EventPacket
+    - Command inheritance via baseMetaCommand attribute (6 commands, 1 abstract base)
+    - Multi-level SpaceSystem hierarchy (root → ADCS, root → Payload)
+    - Cross-SpaceSystem parameter type references
+-->
+<SpaceSystem name="DemoSat" shortDescription="DemoSat comprehensive XTCE v1.2 test database">
+
+  <Header version="1.2"
+          date="2026-04-16"
+          classification="Unclassified"
+          classificationInstructions="No restrictions — test data only"
+          validationStatus="Working">
+    <AuthorSet>
+      <AuthorInformation name="DemoSat Flight Operations Team" role="author"/>
+      <AuthorInformation name="Systems Engineering" role="reviewer"/>
+    </AuthorSet>
+    <NoteSet>
+      <Note>Comprehensive XTCE database for xtce-editor test coverage.</Note>
+      <Note>Covers all ParameterType variants, calibrators, units, aliases, type inheritance, and signed encodings.</Note>
+      <Note>Packet structures follow CCSDS Space Packet Protocol with the standard bit-packed 6-byte primary header (3+1+1+11+2+14+16 bits).</Note>
+    </NoteSet>
+  </Header>
+
+  <TelemetryMetaData>
+
+    <ParameterTypeSet>
+
+      <!-- ── Basic unsigned integer types ──────────────────────────────────── -->
+
+      <IntegerParameterType name="UINT8" shortDescription="8-bit unsigned integer">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <IntegerParameterType name="UINT16" shortDescription="16-bit unsigned integer">
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <IntegerParameterType name="UINT32" shortDescription="32-bit unsigned integer">
+        <IntegerDataEncoding sizeInBits="32" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <!-- ── Signed integer types (two's complement) ────────────────────────── -->
+
+      <IntegerParameterType name="INT8"
+                            shortDescription="8-bit signed integer (two's complement)"
+                            signed="true">
+        <IntegerDataEncoding sizeInBits="8" encoding="twosComplement"/>
+      </IntegerParameterType>
+
+      <IntegerParameterType name="INT16"
+                            shortDescription="16-bit signed integer (two's complement)"
+                            signed="true">
+        <IntegerDataEncoding sizeInBits="16" encoding="twosComplement"/>
+      </IntegerParameterType>
+
+      <IntegerParameterType name="INT32"
+                            shortDescription="32-bit signed integer (two's complement)"
+                            signed="true">
+        <IntegerDataEncoding sizeInBits="32" encoding="twosComplement"/>
+      </IntegerParameterType>
+
+      <!-- ── Float types ────────────────────────────────────────────────────── -->
+
+      <FloatParameterType name="FLOAT32" shortDescription="32-bit IEEE 754 single-precision float">
+        <FloatDataEncoding sizeInBits="32" encoding="IEEE754_1985"/>
+      </FloatParameterType>
+
+      <FloatParameterType name="FLOAT64" shortDescription="64-bit IEEE 754 double-precision float">
+        <FloatDataEncoding sizeInBits="64" encoding="IEEE754_1985"/>
+      </FloatParameterType>
+
+      <!-- ── Boolean types ──────────────────────────────────────────────────── -->
+
+      <BooleanParameterType name="FLAG"
+                            shortDescription="Generic 1-bit on/off flag"
+                            oneStringValue="ON"
+                            zeroStringValue="OFF">
+        <IntegerDataEncoding sizeInBits="1" encoding="unsigned"/>
+      </BooleanParameterType>
+
+      <BooleanParameterType name="VALIDITY"
+                            shortDescription="Data validity indicator"
+                            oneStringValue="VALID"
+                            zeroStringValue="INVALID">
+        <IntegerDataEncoding sizeInBits="1" encoding="unsigned"/>
+      </BooleanParameterType>
+
+      <BooleanParameterType name="ENABLE"
+                            shortDescription="8-bit enable/disable flag (byte-aligned)"
+                            oneStringValue="ENABLED"
+                            zeroStringValue="DISABLED">
+        <LongDescription>Byte-aligned boolean for parameters that must fall on byte boundaries.
+Uses 8-bit encoding so it is byte-aligned in packed containers.</LongDescription>
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+      </BooleanParameterType>
+
+      <!-- ── Enumerated types ───────────────────────────────────────────────── -->
+
+      <EnumeratedParameterType name="SpacecraftModeType"
+                               shortDescription="Spacecraft operating mode (6 states)">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="STANDBY"     shortDescription="Low-power standby"/>
+          <Enumeration value="1" label="NOMINAL"     shortDescription="Normal operations"/>
+          <Enumeration value="2" label="SCIENCE"     shortDescription="Full science payload active"/>
+          <Enumeration value="3" label="ECLIPSE"     shortDescription="In Earth shadow, solar charging suspended"/>
+          <Enumeration value="4" label="SAFE"        shortDescription="Safe mode — minimal subsystems active"/>
+          <Enumeration value="5" label="CONTINGENCY" shortDescription="Contingency — ground commanding required"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <EnumeratedParameterType name="SeverityType"
+                               shortDescription="Event severity level (5 levels)">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="DEBUG"    shortDescription="Verbose diagnostic message"/>
+          <Enumeration value="1" label="INFO"     shortDescription="Informational event"/>
+          <Enumeration value="2" label="WARNING"  shortDescription="Non-critical anomaly"/>
+          <Enumeration value="3" label="ERROR"    shortDescription="Recoverable error"/>
+          <Enumeration value="4" label="CRITICAL" shortDescription="Non-recoverable fault"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <EnumeratedParameterType name="SubsystemType"
+                               shortDescription="Spacecraft subsystem identifier (6 subsystems)">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="OBC"     shortDescription="On-Board Computer"/>
+          <Enumeration value="1" label="ADCS"    shortDescription="Attitude Determination and Control"/>
+          <Enumeration value="2" label="POWER"   shortDescription="Electrical Power System"/>
+          <Enumeration value="3" label="COMMS"   shortDescription="Communications Subsystem"/>
+          <Enumeration value="4" label="PAYLOAD" shortDescription="Science Payload"/>
+          <Enumeration value="5" label="THERMAL" shortDescription="Thermal Control System"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <EnumeratedParameterType name="ResetCauseType"
+                               shortDescription="Most recent OBC reset cause (5 causes)">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="POR"     shortDescription="Power-on reset"/>
+          <Enumeration value="1" label="WDT"     shortDescription="Watchdog timer timeout"/>
+          <Enumeration value="2" label="CMD"     shortDescription="Ground command reset"/>
+          <Enumeration value="3" label="FAULT"   shortDescription="Unhandled fault or exception"/>
+          <Enumeration value="4" label="UNKNOWN" shortDescription="Unknown or undetermined cause"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <EnumeratedParameterType name="PowerModeType"
+                               shortDescription="Battery charge/discharge state">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="CHARGING"    shortDescription="Net charging from solar array"/>
+          <Enumeration value="1" label="DISCHARGING" shortDescription="Net discharging (eclipse or high load)"/>
+          <Enumeration value="2" label="BALANCED"    shortDescription="Charge/discharge approximately balanced"/>
+          <Enumeration value="3" label="FAULT"       shortDescription="EPS fault — check fault register"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <EnumeratedParameterType name="LinkStateType"
+                               shortDescription="RF link acquisition state">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="IDLE"        shortDescription="Transmitter/receiver idle"/>
+          <Enumeration value="1" label="ACQUISITION" shortDescription="Searching for carrier"/>
+          <Enumeration value="2" label="TRACKING"    shortDescription="Carrier locked, framing in progress"/>
+          <Enumeration value="3" label="LOCKED"      shortDescription="Frame-locked, data flowing"/>
+          <Enumeration value="4" label="LOST"        shortDescription="Lock lost after previous acquisition"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <!-- ── Calibrated physical types ──────────────────────────────────────── -->
+
+      <!-- Temperature via polynomial calibrator: T(°C) = -40.0 + 0.02 * raw -->
+      <IntegerParameterType name="TemperatureType"
+                            shortDescription="NTC thermistor ADC (polynomial-calibrated to °C)"
+                            baseType="UINT16">
+        <LongDescription>16-bit unsigned ADC reading from an onboard NTC thermistor.
+A first-order polynomial calibrator converts raw counts to degrees Celsius:
+  T(°C) = -40.0 + 0.02 * raw_counts
+Valid engineering range: -40 °C (raw=0) to +91 °C (raw=6550).</LongDescription>
+        <UnitSet>
+          <Unit description="degrees Celsius">degC</Unit>
+        </UnitSet>
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned">
+          <DefaultCalibrator>
+            <PolynomialCalibrator>
+              <Term exponent="0" coefficient="-40.0"/>
+              <Term exponent="1" coefficient="0.02"/>
+            </PolynomialCalibrator>
+          </DefaultCalibrator>
+        </IntegerDataEncoding>
+      </IntegerParameterType>
+
+      <!-- Battery thermistor via spline calibrator (non-linear NTC characteristic) -->
+      <IntegerParameterType name="BattThermType"
+                            shortDescription="Battery NTC thermistor ADC (spline-calibrated to °C)"
+                            baseType="UINT16">
+        <LongDescription>Battery pack thermistor with non-linear NTC characteristic.
+Calibrated using a cubic spline through 6 characterised measurement points.
+The spline is not extrapolated outside the measured range.</LongDescription>
+        <UnitSet>
+          <Unit description="degrees Celsius">degC</Unit>
+        </UnitSet>
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned">
+          <DefaultCalibrator>
+            <SplineCalibrator order="3" extrapolate="false">
+              <SplinePoint raw="0"    calibrated="-40.0"/>
+              <SplinePoint raw="512"  calibrated="-10.0"/>
+              <SplinePoint raw="1024" calibrated="0.0"/>
+              <SplinePoint raw="2048" calibrated="25.0"/>
+              <SplinePoint raw="3072" calibrated="45.0"/>
+              <SplinePoint raw="4095" calibrated="60.0"/>
+            </SplineCalibrator>
+          </DefaultCalibrator>
+        </IntegerDataEncoding>
+      </IntegerParameterType>
+
+      <!-- Bus voltage: V(mV) = 0.0 + 0.1 * raw -->
+      <IntegerParameterType name="VoltageType"
+                            shortDescription="Bus voltage ADC (polynomial-calibrated to mV)"
+                            baseType="UINT16">
+        <UnitSet>
+          <Unit factor="0.001" description="millivolts">mV</Unit>
+        </UnitSet>
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned">
+          <DefaultCalibrator>
+            <PolynomialCalibrator>
+              <Term exponent="0" coefficient="0.0"/>
+              <Term exponent="1" coefficient="0.1"/>
+            </PolynomialCalibrator>
+          </DefaultCalibrator>
+        </IntegerDataEncoding>
+      </IntegerParameterType>
+
+      <!-- Signed bus current sensor (mA, two's-complement, no calibrator needed) -->
+      <IntegerParameterType name="CurrentType"
+                            shortDescription="Bus current sensor in mA (signed 16-bit two's complement)"
+                            signed="true">
+        <LongDescription>Signed 16-bit current measurement. Positive values indicate net
+charging current into the battery; negative values indicate net load current
+drawn from the battery. Range: -32768 to +32767 mA.</LongDescription>
+        <UnitSet>
+          <Unit description="milliamperes">mA</Unit>
+        </UnitSet>
+        <IntegerDataEncoding sizeInBits="16" encoding="twosComplement"/>
+      </IntegerParameterType>
+
+      <!-- Angular rate in degrees per second (float32) -->
+      <FloatParameterType name="AngularRateType"
+                          shortDescription="Angular rate measurement in degrees per second">
+        <UnitSet>
+          <Unit description="degrees per second">deg/s</Unit>
+        </UnitSet>
+        <FloatDataEncoding sizeInBits="32" encoding="IEEE754_1985"/>
+      </FloatParameterType>
+
+      <!-- RF signal level in dBm (signed 8-bit) -->
+      <IntegerParameterType name="dBmType"
+                            shortDescription="RF power level in dBm (signed 8-bit, range -128 to +127)"
+                            signed="true">
+        <UnitSet>
+          <Unit description="decibels relative to milliwatt">dBm</Unit>
+        </UnitSet>
+        <IntegerDataEncoding sizeInBits="8" encoding="twosComplement"/>
+      </IntegerParameterType>
+
+      <!-- ── Time types ─────────────────────────────────────────────────────── -->
+
+      <AbsoluteTimeParameterType name="GPSTimeType"
+                                 shortDescription="GPS epoch time (seconds since 1980-01-06T00:00:00Z)">
+        <UnitSet>
+          <Unit description="seconds since GPS epoch">s</Unit>
+        </UnitSet>
+        <Encoding>
+          <IntegerDataEncoding sizeInBits="32" encoding="unsigned"/>
+        </Encoding>
+        <ReferenceTime>
+          <Epoch>GPS</Epoch>
+        </ReferenceTime>
+      </AbsoluteTimeParameterType>
+
+      <RelativeTimeParameterType name="METType"
+                                 shortDescription="Mission elapsed time in seconds since last OBC reset">
+        <UnitSet>
+          <Unit description="seconds">s</Unit>
+        </UnitSet>
+        <Encoding>
+          <IntegerDataEncoding sizeInBits="32" encoding="unsigned"/>
+        </Encoding>
+      </RelativeTimeParameterType>
+
+      <!-- ── String and binary types ────────────────────────────────────────── -->
+
+      <StringParameterType name="AsciiString128"
+                           shortDescription="128-byte fixed-length US-ASCII string field">
+        <StringDataEncoding encoding="US-ASCII">
+          <SizeInBits>
+            <Fixed><FixedValue>1024</FixedValue></Fixed>
+          </SizeInBits>
+        </StringDataEncoding>
+      </StringParameterType>
+
+      <BinaryParameterType name="Checksum32Type"
+                           shortDescription="32-bit CRC or Fletcher checksum blob">
+        <BinaryDataEncoding>
+          <SizeInBits>
+            <FixedValue>32</FixedValue>
+          </SizeInBits>
+        </BinaryDataEncoding>
+      </BinaryParameterType>
+
+      <!-- ── Aggregate type (3-component vector) ───────────────────────────── -->
+
+      <AggregateParameterType name="Vector3DType"
+                              shortDescription="Three-component float vector (x, y, z in body frame)">
+        <MemberList>
+          <Member name="x" typeRef="FLOAT32" shortDescription="X component"/>
+          <Member name="y" typeRef="FLOAT32" shortDescription="Y component"/>
+          <Member name="z" typeRef="FLOAT32" shortDescription="Z component"/>
+        </MemberList>
+      </AggregateParameterType>
+
+      <!-- ── Array type (reaction wheel speed array) ───────────────────────── -->
+
+      <ArrayParameterType name="WheelSpeedArrayType"
+                          shortDescription="Three reaction-wheel speeds (INT16 each, RPM)"
+                          arrayTypeRef="INT16"
+                          numberOfDimensions="3"/>
+
+      <!-- ── CCSDS Space Packet primary header types ───────────────────────── -->
+      <!--
+        Bit  0– 2  VersionNumber  (3 bits, always 0)
+        Bit  3     PacketType     (1 bit,  0=TM, 1=TC)
+        Bit  4     SecHdrFlag     (1 bit,  0=absent, 1=present)
+        Bit  5–15  APID           (11 bits, 0–2047) ← DISCRIMINATOR
+        Bit 16–17  SeqFlags       (2 bits,  segmentation flags)
+        Bit 18–31  SeqCount       (14 bits, per-APID counter)
+        Bit 32–47  DataLength     (16 bits, data field length minus 1)
+      -->
+
+      <IntegerParameterType name="VersionNumberType"
+                            shortDescription="CCSDS packet version number (3 bits, always 0)">
+        <IntegerDataEncoding sizeInBits="3" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <EnumeratedParameterType name="PacketTypeEnum"
+                               shortDescription="Packet type: 0=TM telemetry, 1=TC telecommand">
+        <IntegerDataEncoding sizeInBits="1" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration label="TM" value="0"/>
+          <Enumeration label="TC" value="1"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <BooleanParameterType name="SecHdrFlagType"
+                            shortDescription="Secondary header flag: 0=absent, 1=present"
+                            oneStringValue="PRESENT"
+                            zeroStringValue="ABSENT">
+        <IntegerDataEncoding sizeInBits="1" encoding="unsigned"/>
+      </BooleanParameterType>
+
+      <IntegerParameterType name="APIDType"
+                            shortDescription="Application Process Identifier (11 bits, 0–2047)">
+        <IntegerDataEncoding sizeInBits="11" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <EnumeratedParameterType name="SeqFlagsType"
+                               shortDescription="Packet segmentation flags">
+        <IntegerDataEncoding sizeInBits="2" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration label="CONTINUATION" value="0"/>
+          <Enumeration label="FIRST"        value="1"/>
+          <Enumeration label="LAST"         value="2"/>
+          <Enumeration label="STANDALONE"   value="3"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <IntegerParameterType name="SeqCountType"
+                            shortDescription="Packet sequence count (14 bits, wraps 0–16383)">
+        <IntegerDataEncoding sizeInBits="14" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <IntegerParameterType name="DataLengthType"
+                            shortDescription="Packet data field length minus 1 (16 bits, bytes)">
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+      </IntegerParameterType>
+
+    </ParameterTypeSet>
+
+    <ParameterSet>
+
+      <!-- CCSDS Space Packet primary header fields (bit-packed 6-byte header) -->
+      <Parameter name="VersionNumber"
+                 parameterTypeRef="VersionNumberType"
+                 shortDescription="CCSDS packet version (3 bits, always 0)"/>
+      <Parameter name="PacketType"
+                 parameterTypeRef="PacketTypeEnum"
+                 shortDescription="Packet type: 0=TM telemetry, 1=TC telecommand"/>
+      <Parameter name="SecHdrFlag"
+                 parameterTypeRef="SecHdrFlagType"
+                 shortDescription="Secondary header present flag"/>
+      <Parameter name="APID"
+                 parameterTypeRef="APIDType"
+                 shortDescription="Application Process Identifier (11 bits) — packet discriminator"/>
+      <Parameter name="SeqFlags"
+                 parameterTypeRef="SeqFlagsType"
+                 shortDescription="Packet segmentation flags (Continuation/First/Last/Standalone)"/>
+      <Parameter name="SeqCount"
+                 parameterTypeRef="SeqCountType"
+                 shortDescription="Per-APID packet sequence counter (14 bits, wraps 0–16383)"/>
+      <Parameter name="DataLength"
+                 parameterTypeRef="DataLengthType"
+                 shortDescription="Packet data field length minus 1 (bytes)"/>
+
+      <!-- ── Housekeeping fields ──────────────────────────────────────────── -->
+      <Parameter name="SCMode"
+                 parameterTypeRef="SpacecraftModeType"
+                 shortDescription="Current spacecraft operating mode">
+        <ParameterProperties dataSource="telemetered" readOnly="true"/>
+      </Parameter>
+      <Parameter name="MET"
+                 parameterTypeRef="METType"
+                 shortDescription="Mission elapsed time (seconds since last OBC reset)"/>
+      <Parameter name="ResetCause"
+                 parameterTypeRef="ResetCauseType"
+                 shortDescription="Cause of the most recent OBC reset"/>
+      <Parameter name="ResetCount"
+                 parameterTypeRef="UINT16"
+                 shortDescription="Cumulative OBC reset counter since manufacture"/>
+      <Parameter name="EclipseFlag"
+                 parameterTypeRef="FLAG"
+                 shortDescription="Set ON when spacecraft is in Earth shadow"/>
+      <Parameter name="SafeModeFlag"
+                 parameterTypeRef="VALIDITY"
+                 shortDescription="INVALID when safe-mode interlock is active"/>
+      <Parameter name="BattSOC"
+                 parameterTypeRef="UINT8"
+                 shortDescription="Battery state of charge, 0–100 percent"/>
+
+      <!-- ── Power system fields ───────────────────────────────────────────── -->
+      <Parameter name="BattVoltage"
+                 parameterTypeRef="VoltageType"
+                 shortDescription="Battery bus voltage (polynomial-calibrated ADC to mV)">
+        <AliasSet>
+          <Alias nameSpace="YAMCS"       alias="/demosat/eps/battery_voltage"/>
+          <Alias nameSpace="GroundSystem" alias="EPS_BATT_V_RAW"/>
+        </AliasSet>
+        <ParameterProperties dataSource="telemetered" readOnly="true"/>
+      </Parameter>
+      <Parameter name="BattCurrent"
+                 parameterTypeRef="CurrentType"
+                 shortDescription="Battery net current in mA (positive=charging, negative=load)">
+        <AliasSet>
+          <Alias nameSpace="YAMCS" alias="/demosat/eps/battery_current"/>
+        </AliasSet>
+      </Parameter>
+      <Parameter name="SolarVoltage"
+                 parameterTypeRef="VoltageType"
+                 shortDescription="Solar array aggregate output voltage (polynomial-calibrated to mV)"/>
+      <Parameter name="SolarCurrent"
+                 parameterTypeRef="UINT16"
+                 shortDescription="Solar array aggregate output current (raw ADC counts)"/>
+      <Parameter name="BattTemp"
+                 parameterTypeRef="BattThermType"
+                 shortDescription="Battery pack temperature (spline-calibrated NTC to °C)"/>
+      <Parameter name="PowerMode"
+                 parameterTypeRef="PowerModeType"
+                 shortDescription="EPS battery charge/discharge operating mode"/>
+      <Parameter name="LoadPower"
+                 parameterTypeRef="FLOAT32"
+                 shortDescription="Total spacecraft load power in watts">
+        <AliasSet>
+          <Alias nameSpace="YAMCS" alias="/demosat/eps/load_power_w"/>
+        </AliasSet>
+      </Parameter>
+      <Parameter name="ChargePower"
+                 parameterTypeRef="FLOAT32"
+                 shortDescription="Net solar charging power in watts (0 during eclipse)"/>
+
+      <!-- ── Thermal control fields ────────────────────────────────────────── -->
+      <Parameter name="TempPCB"
+                 parameterTypeRef="TemperatureType"
+                 shortDescription="Main OBC PCB temperature (polynomial-calibrated to °C)"/>
+      <Parameter name="TempBattery"
+                 parameterTypeRef="TemperatureType"
+                 shortDescription="Battery substrate temperature (polynomial-calibrated to °C)"/>
+      <Parameter name="TempSolarArray1"
+                 parameterTypeRef="TemperatureType"
+                 shortDescription="Solar panel 1 temperature (polynomial-calibrated to °C)"/>
+      <Parameter name="TempSolarArray2"
+                 parameterTypeRef="TemperatureType"
+                 shortDescription="Solar panel 2 temperature (polynomial-calibrated to °C)"/>
+      <Parameter name="Heater1Active"
+                 parameterTypeRef="FLAG"
+                 shortDescription="Battery heater element 1 active (ON=heating)"/>
+      <Parameter name="Heater2Active"
+                 parameterTypeRef="FLAG"
+                 shortDescription="Battery heater element 2 active (ON=heating)"/>
+
+      <!-- ── Communications fields ─────────────────────────────────────────── -->
+      <Parameter name="TxPower"
+                 parameterTypeRef="dBmType"
+                 shortDescription="Transmit amplifier output power in dBm (signed INT8)"/>
+      <Parameter name="RxSignal"
+                 parameterTypeRef="dBmType"
+                 shortDescription="Received signal strength indicator in dBm (signed INT8)"/>
+      <Parameter name="FramesSent"
+                 parameterTypeRef="UINT32"
+                 shortDescription="Cumulative downlink frames transmitted since last reset"/>
+      <Parameter name="FramesReceived"
+                 parameterTypeRef="UINT32"
+                 shortDescription="Cumulative uplink frames received since last reset"/>
+      <Parameter name="FramesErrored"
+                 parameterTypeRef="UINT16"
+                 shortDescription="Uplink frames with uncorrectable errors since last reset"/>
+      <Parameter name="LinkState"
+                 parameterTypeRef="LinkStateType"
+                 shortDescription="RF link acquisition and lock state"/>
+      <Parameter name="SymbolRate"
+                 parameterTypeRef="UINT32"
+                 shortDescription="Current modem symbol rate in baud"/>
+
+      <!-- ── OBC health fields ─────────────────────────────────────────────── -->
+      <Parameter name="CPULoad1s"
+                 parameterTypeRef="UINT8"
+                 shortDescription="1-second rolling average CPU load (0–100 percent)"/>
+      <Parameter name="CPULoad5s"
+                 parameterTypeRef="UINT8"
+                 shortDescription="5-second rolling average CPU load (0–100 percent)"/>
+      <Parameter name="CPULoad15s"
+                 parameterTypeRef="UINT8"
+                 shortDescription="15-second rolling average CPU load (0–100 percent)"/>
+      <Parameter name="MemFreeKB"
+                 parameterTypeRef="UINT32"
+                 shortDescription="Free heap memory in kilobytes"/>
+      <Parameter name="FlashErrors"
+                 parameterTypeRef="UINT16"
+                 shortDescription="Accumulated NOR flash error count since last reset"/>
+      <Parameter name="CoreTemp"
+                 parameterTypeRef="TemperatureType"
+                 shortDescription="SoC die temperature (polynomial-calibrated to °C)"/>
+
+      <!-- ── Event log fields ──────────────────────────────────────────────── -->
+      <Parameter name="EventTimestamp"
+                 parameterTypeRef="GPSTimeType"
+                 shortDescription="GPS time when the event was generated"/>
+      <Parameter name="EventId"
+                 parameterTypeRef="UINT16"
+                 shortDescription="Unique numeric event identifier from the event catalogue"/>
+      <Parameter name="EventSeverity"
+                 parameterTypeRef="SeverityType"
+                 shortDescription="Event severity classification"/>
+      <Parameter name="EventSubsystem"
+                 parameterTypeRef="SubsystemType"
+                 shortDescription="Originating subsystem"/>
+      <Parameter name="EventRepeatCount"
+                 parameterTypeRef="UINT8"
+                 shortDescription="Count of identical events suppressed before this emission"/>
+      <Parameter name="EventSuppressed"
+                 parameterTypeRef="ENABLE"
+                 shortDescription="Whether further identical events are currently rate-limited"/>
+      <Parameter name="EventMessage"
+                 parameterTypeRef="AsciiString128"
+                 shortDescription="Human-readable event description (128-byte null-padded ASCII)"/>
+
+    </ParameterSet>
+
+    <ContainerSet>
+
+      <!-- Abstract 48-bit CCSDS Space Packet primary header (bit-packed) -->
+      <SequenceContainer name="CCSDSHeader"
+                         abstract="true"
+                         shortDescription="Abstract CCSDS Space Packet primary header (bit-packed 6 bytes)">
+        <EntryList>
+          <ParameterRefEntry parameterRef="VersionNumber"/>
+          <ParameterRefEntry parameterRef="PacketType"/>
+          <ParameterRefEntry parameterRef="SecHdrFlag"/>
+          <ParameterRefEntry parameterRef="APID"/>
+          <ParameterRefEntry parameterRef="SeqFlags"/>
+          <ParameterRefEntry parameterRef="SeqCount"/>
+          <ParameterRefEntry parameterRef="DataLength"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 1. Housekeeping packet (APID 100) ──────────────────────────────── -->
+      <SequenceContainer name="HKPacket"
+                         shortDescription="Spacecraft housekeeping telemetry — APID 100">
+        <BaseContainer containerRef="CCSDSHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="100" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="SCMode"/>
+          <ParameterRefEntry parameterRef="MET"/>
+          <ParameterRefEntry parameterRef="ResetCause"/>
+          <ParameterRefEntry parameterRef="ResetCount"/>
+          <ParameterRefEntry parameterRef="EclipseFlag"/>
+          <ParameterRefEntry parameterRef="SafeModeFlag"/>
+          <ParameterRefEntry parameterRef="BattSOC"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 2. Power system housekeeping (APID 110) ───────────────────────── -->
+      <SequenceContainer name="PowerPacket"
+                         shortDescription="Electrical power system telemetry — APID 110">
+        <BaseContainer containerRef="CCSDSHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="110" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="BattVoltage"/>
+          <ParameterRefEntry parameterRef="BattCurrent"/>
+          <ParameterRefEntry parameterRef="SolarVoltage"/>
+          <ParameterRefEntry parameterRef="SolarCurrent"/>
+          <ParameterRefEntry parameterRef="BattSOC"/>
+          <ParameterRefEntry parameterRef="BattTemp"/>
+          <ParameterRefEntry parameterRef="PowerMode"/>
+          <ParameterRefEntry parameterRef="LoadPower"/>
+          <ParameterRefEntry parameterRef="ChargePower"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 3. Thermal control system (APID 120) ──────────────────────────── -->
+      <SequenceContainer name="ThermalPacket"
+                         shortDescription="Thermal control system telemetry — APID 120">
+        <BaseContainer containerRef="CCSDSHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="120" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="TempPCB"/>
+          <ParameterRefEntry parameterRef="TempBattery"/>
+          <ParameterRefEntry parameterRef="TempSolarArray1"/>
+          <ParameterRefEntry parameterRef="TempSolarArray2"/>
+          <ParameterRefEntry parameterRef="Heater1Active"/>
+          <ParameterRefEntry parameterRef="Heater2Active"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 4. Communications subsystem (APID 130) ────────────────────────── -->
+      <SequenceContainer name="CommPacket"
+                         shortDescription="RF communications link telemetry — APID 130">
+        <BaseContainer containerRef="CCSDSHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="130" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="TxPower"/>
+          <ParameterRefEntry parameterRef="RxSignal"/>
+          <ParameterRefEntry parameterRef="FramesSent"/>
+          <ParameterRefEntry parameterRef="FramesReceived"/>
+          <ParameterRefEntry parameterRef="FramesErrored"/>
+          <ParameterRefEntry parameterRef="LinkState"/>
+          <ParameterRefEntry parameterRef="SymbolRate"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 5. On-Board Computer health (APID 140) ────────────────────────── -->
+      <SequenceContainer name="OBCPacket"
+                         shortDescription="On-board computer health telemetry — APID 140">
+        <BaseContainer containerRef="CCSDSHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="140" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="CPULoad1s"/>
+          <ParameterRefEntry parameterRef="CPULoad5s"/>
+          <ParameterRefEntry parameterRef="CPULoad15s"/>
+          <ParameterRefEntry parameterRef="MemFreeKB"/>
+          <ParameterRefEntry parameterRef="FlashErrors"/>
+          <ParameterRefEntry parameterRef="CoreTemp"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 6. Event log packet (APID 150) ────────────────────────────────── -->
+      <!-- Uses ComparisonList: APID==150 AND DataLength!=0 -->
+      <SequenceContainer name="EventPacket"
+                         shortDescription="Onboard event log entry — APID 150">
+        <BaseContainer containerRef="CCSDSHeader">
+          <RestrictionCriteria>
+            <ComparisonList>
+              <Comparison parameterRef="APID"       value="150" comparisonOperator="=="/>
+              <Comparison parameterRef="DataLength" value="0"   comparisonOperator="!="/>
+            </ComparisonList>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="EventTimestamp"/>
+          <ParameterRefEntry parameterRef="EventId"/>
+          <ParameterRefEntry parameterRef="EventSeverity"/>
+          <ParameterRefEntry parameterRef="EventSubsystem"/>
+          <ParameterRefEntry parameterRef="EventRepeatCount"/>
+          <ParameterRefEntry parameterRef="EventSuppressed"/>
+          <ParameterRefEntry parameterRef="EventMessage"/>
+        </EntryList>
+      </SequenceContainer>
+
+    </ContainerSet>
+
+  </TelemetryMetaData>
+
+  <CommandMetaData>
+
+    <ArgumentTypeSet>
+
+      <IntegerArgumentType name="CmdUINT8" shortDescription="8-bit unsigned command argument" signed="false">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+      </IntegerArgumentType>
+
+      <IntegerArgumentType name="CmdUINT16" shortDescription="16-bit unsigned command argument" signed="false">
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+      </IntegerArgumentType>
+
+      <IntegerArgumentType name="CmdUINT32" shortDescription="32-bit unsigned command argument" signed="false">
+        <IntegerDataEncoding sizeInBits="32" encoding="unsigned"/>
+      </IntegerArgumentType>
+
+      <FloatArgumentType name="CmdFloat32" shortDescription="32-bit IEEE 754 float command argument">
+        <FloatDataEncoding sizeInBits="32" encoding="IEEE754_1985"/>
+      </FloatArgumentType>
+
+      <BooleanArgumentType name="CmdBool"
+                           shortDescription="Byte-aligned boolean command argument"
+                           oneStringValue="TRUE"
+                           zeroStringValue="FALSE">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+      </BooleanArgumentType>
+
+      <EnumeratedArgumentType name="ModeArg"
+                              shortDescription="Target operating mode (subset of SpacecraftModeType)">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="1" label="NOMINAL"/>
+          <Enumeration value="2" label="SCIENCE"/>
+          <Enumeration value="3" label="ECLIPSE"/>
+          <Enumeration value="4" label="SAFE"/>
+        </EnumerationList>
+      </EnumeratedArgumentType>
+
+      <EnumeratedArgumentType name="SubsystemArg"
+                              shortDescription="Target subsystem for reset or configuration commands">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="OBC"/>
+          <Enumeration value="1" label="ADCS"/>
+          <Enumeration value="2" label="POWER"/>
+          <Enumeration value="3" label="COMMS"/>
+          <Enumeration value="4" label="PAYLOAD"/>
+          <Enumeration value="5" label="THERMAL"/>
+        </EnumerationList>
+      </EnumeratedArgumentType>
+
+    </ArgumentTypeSet>
+
+    <MetaCommandSet>
+
+      <!-- Abstract base command: provides 8-bit command ID in every concrete command -->
+      <MetaCommand name="BaseCmd"
+                   abstract="true"
+                   shortDescription="Abstract base — every command carries an 8-bit command ID">
+        <ArgumentList>
+          <Argument name="cmdId"
+                    argumentTypeRef="CmdUINT8"
+                    shortDescription="Numeric command identifier from the command catalogue"/>
+        </ArgumentList>
+        <CommandContainer name="BaseCmdContainer">
+          <EntryList>
+            <ArgumentRefEntry argumentRef="cmdId"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+
+      <!-- No-operation -->
+      <MetaCommand name="NoopCmd"
+                   baseMetaCommand="BaseCmd"
+                   shortDescription="No-operation keep-alive ping">
+        <CommandContainer name="NoopCmdContainer">
+          <EntryList/>
+        </CommandContainer>
+      </MetaCommand>
+
+      <!-- Spacecraft mode change -->
+      <MetaCommand name="SetModeCmd"
+                   baseMetaCommand="BaseCmd"
+                   shortDescription="Command the spacecraft to a new operating mode">
+        <ArgumentList>
+          <Argument name="targetMode"
+                    argumentTypeRef="ModeArg"
+                    shortDescription="Desired target operating mode"/>
+        </ArgumentList>
+        <CommandContainer name="SetModeCmdContainer">
+          <EntryList>
+            <ArgumentRefEntry argumentRef="targetMode"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+
+      <!-- Generic 32-bit parameter write -->
+      <MetaCommand name="SetParamCmd"
+                   baseMetaCommand="BaseCmd"
+                   shortDescription="Write a 32-bit value to an onboard parameter by ID">
+        <ArgumentList>
+          <Argument name="paramId"
+                    argumentTypeRef="CmdUINT16"
+                    shortDescription="Onboard parameter table index"/>
+          <Argument name="paramValue"
+                    argumentTypeRef="CmdUINT32"
+                    shortDescription="New 32-bit value to write"
+                    initialValue="0"/>
+        </ArgumentList>
+        <CommandContainer name="SetParamCmdContainer">
+          <EntryList>
+            <ArgumentRefEntry argumentRef="paramId"/>
+            <ArgumentRefEntry argumentRef="paramValue"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+
+      <!-- Subsystem reset -->
+      <MetaCommand name="ResetSubsystemCmd"
+                   baseMetaCommand="BaseCmd"
+                   shortDescription="Assert a software reset on the specified subsystem">
+        <ArgumentList>
+          <Argument name="target"
+                    argumentTypeRef="SubsystemArg"
+                    shortDescription="Subsystem to reset"/>
+        </ArgumentList>
+        <CommandContainer name="ResetSubsystemCmdContainer">
+          <EntryList>
+            <ArgumentRefEntry argumentRef="target"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+
+      <!-- ADCS inertial pointing target -->
+      <MetaCommand name="ADCSPointCmd"
+                   baseMetaCommand="BaseCmd"
+                   shortDescription="Command ADCS to track an inertial target (J2000 RA/Dec)">
+        <ArgumentList>
+          <Argument name="targetRA"
+                    argumentTypeRef="CmdFloat32"
+                    shortDescription="Target right ascension in degrees (0–360)"/>
+          <Argument name="targetDec"
+                    argumentTypeRef="CmdFloat32"
+                    shortDescription="Target declination in degrees (-90 to +90)"/>
+          <Argument name="targetRoll"
+                    argumentTypeRef="CmdFloat32"
+                    shortDescription="Desired roll angle about boresight in degrees"
+                    initialValue="0.0"/>
+        </ArgumentList>
+        <CommandContainer name="ADCSPointCmdContainer">
+          <EntryList>
+            <ArgumentRefEntry argumentRef="targetRA"/>
+            <ArgumentRefEntry argumentRef="targetDec"/>
+            <ArgumentRefEntry argumentRef="targetRoll"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+
+      <!-- Science instrument configuration -->
+      <MetaCommand name="PayloadConfigCmd"
+                   baseMetaCommand="BaseCmd"
+                   shortDescription="Configure a science instrument channel">
+        <ArgumentList>
+          <Argument name="channel"
+                    argumentTypeRef="CmdUINT8"
+                    shortDescription="Channel index to configure (0–3)"
+                    initialValue="0"/>
+          <Argument name="integTime"
+                    argumentTypeRef="CmdUINT32"
+                    shortDescription="Integration time in microseconds"/>
+          <Argument name="enabled"
+                    argumentTypeRef="CmdBool"
+                    shortDescription="Enable or disable this channel"
+                    initialValue="TRUE"/>
+        </ArgumentList>
+        <CommandContainer name="PayloadConfigCmdContainer">
+          <EntryList>
+            <ArgumentRefEntry argumentRef="channel"/>
+            <ArgumentRefEntry argumentRef="integTime"/>
+            <ArgumentRefEntry argumentRef="enabled"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+
+    </MetaCommandSet>
+
+  </CommandMetaData>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- Child SpaceSystem: ADCS subsystem                                       -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <SpaceSystem name="ADCS" shortDescription="Attitude Determination and Control subsystem">
+
+    <TelemetryMetaData>
+
+      <ParameterTypeSet>
+        <!-- Quaternion component type (scalar or vector component, range -1.0 to +1.0) -->
+        <FloatParameterType name="QuatComponentType"
+                            shortDescription="Unit quaternion component in range [-1.0, +1.0]">
+          <FloatDataEncoding sizeInBits="32" encoding="IEEE754_1985"/>
+        </FloatParameterType>
+      </ParameterTypeSet>
+
+      <ParameterSet>
+        <!-- Attitude quaternion (body frame relative to ECI) -->
+        <Parameter name="Q0" parameterTypeRef="QuatComponentType" shortDescription="Quaternion scalar (w) component"/>
+        <Parameter name="Q1" parameterTypeRef="QuatComponentType" shortDescription="Quaternion i vector component"/>
+        <Parameter name="Q2" parameterTypeRef="QuatComponentType" shortDescription="Quaternion j vector component"/>
+        <Parameter name="Q3" parameterTypeRef="QuatComponentType" shortDescription="Quaternion k vector component"/>
+        <!-- Body-frame angular rates from gyroscopes — reference parent AngularRateType -->
+        <Parameter name="OmegaX" parameterTypeRef="AngularRateType" shortDescription="Body X-axis angular rate (deg/s)"/>
+        <Parameter name="OmegaY" parameterTypeRef="AngularRateType" shortDescription="Body Y-axis angular rate (deg/s)"/>
+        <Parameter name="OmegaZ" parameterTypeRef="AngularRateType" shortDescription="Body Z-axis angular rate (deg/s)"/>
+        <!-- Scalar sun angle from sun sensor -->
+        <Parameter name="SunAngle" parameterTypeRef="FLOAT32"        shortDescription="Boresight-to-Sun angle in degrees"/>
+        <!-- ADCS subsystem mode — references parent SpacecraftModeType -->
+        <Parameter name="ADCSMode"   parameterTypeRef="SpacecraftModeType" shortDescription="ADCS operating mode"/>
+        <!-- Star tracker validity and star count -->
+        <Parameter name="STValid"    parameterTypeRef="VALIDITY"           shortDescription="Star tracker solution validity"/>
+        <Parameter name="StarCount"  parameterTypeRef="UINT8"              shortDescription="Stars used in current solution (0 = no solution)"/>
+      </ParameterSet>
+
+      <ContainerSet>
+        <!-- 7. ADCS attitude packet (APID 200) — extends parent CCSDSHeader -->
+        <SequenceContainer name="ADCSPacket"
+                           shortDescription="ADCS attitude, rate, and star tracker telemetry — APID 200">
+          <BaseContainer containerRef="CCSDSHeader">
+            <RestrictionCriteria>
+              <Comparison parameterRef="APID" value="200" comparisonOperator="=="/>
+            </RestrictionCriteria>
+          </BaseContainer>
+          <EntryList>
+            <ParameterRefEntry parameterRef="Q0"/>
+            <ParameterRefEntry parameterRef="Q1"/>
+            <ParameterRefEntry parameterRef="Q2"/>
+            <ParameterRefEntry parameterRef="Q3"/>
+            <ParameterRefEntry parameterRef="OmegaX"/>
+            <ParameterRefEntry parameterRef="OmegaY"/>
+            <ParameterRefEntry parameterRef="OmegaZ"/>
+            <ParameterRefEntry parameterRef="SunAngle"/>
+            <ParameterRefEntry parameterRef="ADCSMode"/>
+            <ParameterRefEntry parameterRef="STValid"/>
+            <ParameterRefEntry parameterRef="StarCount"/>
+          </EntryList>
+        </SequenceContainer>
+      </ContainerSet>
+
+    </TelemetryMetaData>
+
+  </SpaceSystem>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- Child SpaceSystem: Payload (science instrument)                          -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <SpaceSystem name="Payload" shortDescription="Science instrument payload subsystem">
+
+    <TelemetryMetaData>
+
+      <ParameterTypeSet>
+        <!-- High-precision 64-bit science measurement -->
+        <FloatParameterType name="SciMeasurementType"
+                            shortDescription="High-precision calibrated science measurement (FLOAT64)">
+          <LongDescription>64-bit double-precision measurement used for calibration reference
+values where single-precision would lose too many significant digits.</LongDescription>
+          <UnitSet>
+            <Unit description="photon counts">cnt</Unit>
+          </UnitSet>
+          <FloatDataEncoding sizeInBits="64" encoding="IEEE754_1985"/>
+        </FloatParameterType>
+      </ParameterTypeSet>
+
+      <ParameterSet>
+        <!-- Science acquisition parameters -->
+        <Parameter name="SciTimestamp"  parameterTypeRef="GPSTimeType"       shortDescription="GPS time at start of integration window"/>
+        <Parameter name="IntegTime"     parameterTypeRef="UINT32"             shortDescription="Integration window duration in microseconds"/>
+        <Parameter name="Ch1Counts"     parameterTypeRef="UINT32"             shortDescription="Channel 1 accumulated photon counts"/>
+        <Parameter name="Ch2Counts"     parameterTypeRef="UINT32"             shortDescription="Channel 2 accumulated photon counts"/>
+        <Parameter name="Ch3Counts"     parameterTypeRef="UINT32"             shortDescription="Channel 3 accumulated photon counts"/>
+        <Parameter name="Ch4Counts"     parameterTypeRef="UINT32"             shortDescription="Channel 4 accumulated photon counts"/>
+        <!-- CCD temperature from polynomial-calibrated parent TemperatureType -->
+        <Parameter name="CCDTemp"       parameterTypeRef="TemperatureType"    shortDescription="CCD focal-plane temperature (polynomial-calibrated to °C)"/>
+        <Parameter name="DarkCurrent"   parameterTypeRef="FLOAT32"            shortDescription="Background dark-count rate (counts/s)"/>
+        <Parameter name="SciChecksum"   parameterTypeRef="Checksum32Type"     shortDescription="32-bit CRC of the science frame payload"/>
+        <!-- Calibration state parameters -->
+        <Parameter name="CalState"      parameterTypeRef="ENABLE"             shortDescription="Calibration coefficients valid (ENABLED = in-date)"/>
+        <Parameter name="CalProgress"   parameterTypeRef="UINT8"              shortDescription="Calibration sequence progress 0–100 percent"/>
+        <Parameter name="CalTargetCh"   parameterTypeRef="UINT8"              shortDescription="Channel currently being calibrated (0–3)"/>
+        <Parameter name="CalReference"  parameterTypeRef="SciMeasurementType" shortDescription="Reference illumination level for flat-field calibration"/>
+        <Parameter name="CalDark"       parameterTypeRef="SciMeasurementType" shortDescription="Dark-frame baseline for bias subtraction"/>
+      </ParameterSet>
+
+      <ContainerSet>
+
+        <!-- 8. Science data packet (APID 300) -->
+        <SequenceContainer name="SciPacket"
+                           shortDescription="Science instrument raw data frame — APID 300">
+          <BaseContainer containerRef="CCSDSHeader">
+            <RestrictionCriteria>
+              <Comparison parameterRef="APID" value="300" comparisonOperator="=="/>
+            </RestrictionCriteria>
+          </BaseContainer>
+          <EntryList>
+            <ParameterRefEntry parameterRef="SciTimestamp"/>
+            <ParameterRefEntry parameterRef="IntegTime"/>
+            <ParameterRefEntry parameterRef="Ch1Counts"/>
+            <ParameterRefEntry parameterRef="Ch2Counts"/>
+            <ParameterRefEntry parameterRef="Ch3Counts"/>
+            <ParameterRefEntry parameterRef="Ch4Counts"/>
+            <ParameterRefEntry parameterRef="CCDTemp"/>
+            <ParameterRefEntry parameterRef="DarkCurrent"/>
+            <ParameterRefEntry parameterRef="SciChecksum"/>
+          </EntryList>
+        </SequenceContainer>
+
+        <!-- 9. Calibration state packet (APID 301) -->
+        <SequenceContainer name="CalPacket"
+                           shortDescription="Science instrument calibration status — APID 301">
+          <BaseContainer containerRef="CCSDSHeader">
+            <RestrictionCriteria>
+              <Comparison parameterRef="APID" value="301" comparisonOperator="=="/>
+            </RestrictionCriteria>
+          </BaseContainer>
+          <EntryList>
+            <ParameterRefEntry parameterRef="CalState"/>
+            <ParameterRefEntry parameterRef="CalProgress"/>
+            <ParameterRefEntry parameterRef="CalTargetCh"/>
+            <ParameterRefEntry parameterRef="CalReference"/>
+            <ParameterRefEntry parameterRef="CalDark"/>
+          </EntryList>
+        </SequenceContainer>
+
+      </ContainerSet>
+
+    </TelemetryMetaData>
+
+  </SpaceSystem>
+
+</SpaceSystem>

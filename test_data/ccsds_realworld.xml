@@ -1,0 +1,494 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ccsds_realworld.xml — CCSDS Space Packet Protocol Wireshark dissector test database.
+
+  PURPOSE
+  =======
+  Specifically designed to exercise xtce-tools gen-dissector and gen-testdata.
+  Uses the real CCSDS Space Packet Protocol primary header bit layout, which
+  forces the dissector generator into the bitfield() extraction paths for both
+  the discriminator read and for header fields.
+
+  CCSDS PRIMARY HEADER BIT LAYOUT (48 bits = 6 bytes)
+  ====================================================
+  Bit  0– 2  VersionNumber    (3 bits, always 0b000 for CCSDS version 1)
+  Bit  3     PacketType        (1 bit,  0=TM telemetry, 1=TC telecommand)
+  Bit  4     SecondaryHdrFlag  (1 bit,  0=absent, 1=present)
+  Bit  5–15  APID              (11 bits, 0–2047) ← DISCRIMINATOR (unaligned!)
+  Bit 16–17  SequenceFlags     (2 bits,  enum: 00=Continuation, 01=First, 10=Last, 11=Standalone)
+  Bit 18–31  SequenceCount     (14 bits, 0–16383)
+  Bit 32–47  DataLength        (16 bits, octets in data field minus 1)
+
+  Discriminator APID is at bit offset 5, size 11 bits.  The generated Lua will use:
+    local disc_val = buf(0, 2):bitfield(5, 11)
+  This exercises the unaligned-discriminator path in dissector.rs.
+
+  DISSECTOR COVERAGE BY PACKET
+  =============================
+  HKPacket      (APID 100) — uint8/16/32, float32, bool, enum          → ProtoField.uint*, float, bool, add/add_le
+  SciPacket     (APID 200) — float64 (double), int32, abstime           → ProtoField.double, int32, bytes
+  EventPacket   (APID 300) — string (128 bytes), uint16, enum           → ProtoField.string, uint16
+  DiagPacket    (APID 400) — little-endian uint16/int16, binary blob    → tree:add_le, ProtoField.bytes
+  TimeSyncPacket(APID 500) — uint64, uint32, enum                       → ProtoField.uint64
+  StatusPacket  (APID 600) — multiple enums, bool, uint32               → dense enum tables
+
+  All 6 packets share the unaligned CCSDSPrimaryHeader base, so the dissector
+  generates bitfield() calls for VersionNumber (3-bit), PacketType (1-bit),
+  SecondaryHdrFlag (1-bit), SequenceFlags (2-bit), and SequenceCount (14-bit).
+  DataLength and all payload fields are byte-aligned.
+-->
+<SpaceSystem name="CCSDSRealWorld"
+             shortDescription="CCSDS Space Packet Protocol — Wireshark dissector test database">
+
+  <Header version="1.0"
+          date="2026-04-16"
+          classification="Unclassified"
+          validationStatus="Working">
+    <AuthorSet>
+      <AuthorInformation name="xtce-editor test suite" role="author"/>
+    </AuthorSet>
+    <NoteSet>
+      <Note>True CCSDS primary header bit layout to exercise gen-dissector bitfield paths.</Note>
+      <Note>APIDsare  100/200/300/400/500/600 (all fit in 11 bits, max 2047).</Note>
+    </NoteSet>
+  </Header>
+
+  <TelemetryMetaData>
+
+    <ParameterTypeSet>
+
+      <!-- ── CCSDS primary header field types ────────────────────────────── -->
+
+      <!-- 3-bit CCSDS version number (always 0 in CCSDS version 1) -->
+      <IntegerParameterType name="VersionNumberType"
+                            shortDescription="CCSDS packet version number (3 bits, value 0b000)">
+        <IntegerDataEncoding sizeInBits="3" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <!-- 1-bit packet type (TM=0, TC=1) -->
+      <EnumeratedParameterType name="PacketTypeEnum"
+                               shortDescription="CCSDS packet type: 0=TM telemetry, 1=TC telecommand">
+        <IntegerDataEncoding sizeInBits="1" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="TM" shortDescription="Telemetry packet"/>
+          <Enumeration value="1" label="TC" shortDescription="Telecommand packet"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <!-- 1-bit secondary header flag -->
+      <BooleanParameterType name="SecHdrFlagType"
+                            shortDescription="Secondary header present flag"
+                            oneStringValue="PRESENT"
+                            zeroStringValue="ABSENT">
+        <IntegerDataEncoding sizeInBits="1" encoding="unsigned"/>
+      </BooleanParameterType>
+
+      <!-- 11-bit APID — the packet discriminator -->
+      <IntegerParameterType name="APIDType"
+                            shortDescription="Application Process Identifier (11 bits, 0–2047)">
+        <IntegerDataEncoding sizeInBits="11" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <!-- 2-bit sequence flags -->
+      <EnumeratedParameterType name="SeqFlagsType"
+                               shortDescription="CCSDS sequence flags: packet segmentation state">
+        <IntegerDataEncoding sizeInBits="2" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="CONTINUATION" shortDescription="Continuation segment of a multi-packet data unit"/>
+          <Enumeration value="1" label="FIRST"        shortDescription="First segment of a multi-packet data unit"/>
+          <Enumeration value="2" label="LAST"         shortDescription="Last segment of a multi-packet data unit"/>
+          <Enumeration value="3" label="STANDALONE"   shortDescription="Unsegmented (complete) data unit"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <!-- 14-bit sequence count -->
+      <IntegerParameterType name="SeqCountType"
+                            shortDescription="Packet sequence count (14 bits, 0–16383, wraps)">
+        <IntegerDataEncoding sizeInBits="14" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <!-- 16-bit data length (byte-aligned) -->
+      <IntegerParameterType name="DataLengthType"
+                            shortDescription="Data field length minus 1 in bytes (16 bits)">
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <!-- ── HKPacket field types ──────────────────────────────────────────── -->
+
+      <IntegerParameterType name="UINT8"  shortDescription="8-bit unsigned">
+        <IntegerDataEncoding sizeInBits="8"  encoding="unsigned"/>
+      </IntegerParameterType>
+      <IntegerParameterType name="UINT16" shortDescription="16-bit unsigned">
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned"/>
+      </IntegerParameterType>
+      <IntegerParameterType name="UINT32" shortDescription="32-bit unsigned">
+        <IntegerDataEncoding sizeInBits="32" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <BooleanParameterType name="BoolType"
+                            shortDescription="1-bit boolean"
+                            oneStringValue="TRUE"
+                            zeroStringValue="FALSE">
+        <IntegerDataEncoding sizeInBits="1" encoding="unsigned"/>
+      </BooleanParameterType>
+
+      <!-- Byte-aligned bool for parameters that need byte boundaries -->
+      <BooleanParameterType name="Bool8Type"
+                            shortDescription="8-bit byte-aligned boolean"
+                            oneStringValue="ACTIVE"
+                            zeroStringValue="INACTIVE">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+      </BooleanParameterType>
+
+      <EnumeratedParameterType name="SCModeType"
+                               shortDescription="Spacecraft operating mode">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="STANDBY"/>
+          <Enumeration value="1" label="NOMINAL"/>
+          <Enumeration value="2" label="SCIENCE"/>
+          <Enumeration value="3" label="ECLIPSE"/>
+          <Enumeration value="4" label="SAFE"/>
+          <Enumeration value="5" label="CONTINGENCY"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <FloatParameterType name="Float32Type" shortDescription="32-bit IEEE 754 float">
+        <FloatDataEncoding sizeInBits="32" encoding="IEEE754_1985"/>
+      </FloatParameterType>
+
+      <!-- ── SciPacket field types ─────────────────────────────────────────── -->
+
+      <!-- 64-bit double: exercises ProtoField.double in generated Lua -->
+      <FloatParameterType name="Float64Type" shortDescription="64-bit IEEE 754 double">
+        <FloatDataEncoding sizeInBits="64" encoding="IEEE754_1985"/>
+      </FloatParameterType>
+
+      <!-- Signed 32-bit: exercises ProtoField.int32 -->
+      <IntegerParameterType name="INT32" shortDescription="32-bit signed two's complement" signed="true">
+        <IntegerDataEncoding sizeInBits="32" encoding="twosComplement"/>
+      </IntegerParameterType>
+
+      <!-- Absolute time: stored as 32-bit GPS seconds -->
+      <AbsoluteTimeParameterType name="GPSTimeType"
+                                 shortDescription="GPS time (seconds since 1980-01-06)">
+        <UnitSet><Unit>s</Unit></UnitSet>
+        <Encoding>
+          <IntegerDataEncoding sizeInBits="32" encoding="unsigned"/>
+        </Encoding>
+        <ReferenceTime><Epoch>GPS</Epoch></ReferenceTime>
+      </AbsoluteTimeParameterType>
+
+      <!-- ── EventPacket field types ───────────────────────────────────────── -->
+
+      <!-- 640-bit string (80 bytes US-ASCII): exercises ProtoField.string -->
+      <StringParameterType name="AsciiMsg80Type"
+                           shortDescription="80-byte fixed-length US-ASCII message string">
+        <StringDataEncoding encoding="US-ASCII">
+          <SizeInBits>
+            <Fixed><FixedValue>640</FixedValue></Fixed>
+          </SizeInBits>
+        </StringDataEncoding>
+      </StringParameterType>
+
+      <EnumeratedParameterType name="SeverityType"
+                               shortDescription="Event severity">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="DEBUG"/>
+          <Enumeration value="1" label="INFO"/>
+          <Enumeration value="2" label="WARNING"/>
+          <Enumeration value="3" label="ERROR"/>
+          <Enumeration value="4" label="CRITICAL"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <!-- ── DiagPacket field types (little-endian) ────────────────────────── -->
+
+      <!-- LE uint16: exercises tree:add_le in generated Lua -->
+      <IntegerParameterType name="UINT16LE"
+                            shortDescription="16-bit unsigned, little-endian byte order">
+        <IntegerDataEncoding sizeInBits="16" encoding="unsigned"
+                             byteOrder="leastSignificantByteFirst"/>
+      </IntegerParameterType>
+
+      <!-- LE int16 signed: exercises ProtoField.int16 + add_le -->
+      <IntegerParameterType name="INT16LE"
+                            shortDescription="16-bit signed two's complement, little-endian"
+                            signed="true">
+        <IntegerDataEncoding sizeInBits="16" encoding="twosComplement"
+                             byteOrder="leastSignificantByteFirst"/>
+      </IntegerParameterType>
+
+      <!-- LE uint32: exercises tree:add_le for 4-byte field -->
+      <IntegerParameterType name="UINT32LE"
+                            shortDescription="32-bit unsigned, little-endian byte order">
+        <IntegerDataEncoding sizeInBits="32" encoding="unsigned"
+                             byteOrder="leastSignificantByteFirst"/>
+      </IntegerParameterType>
+
+      <!-- Binary blob: exercises ProtoField.bytes -->
+      <BinaryParameterType name="Blob16Type"
+                           shortDescription="16-byte (128-bit) opaque binary blob">
+        <BinaryDataEncoding>
+          <SizeInBits><FixedValue>128</FixedValue></SizeInBits>
+        </BinaryDataEncoding>
+      </BinaryParameterType>
+
+      <!-- ── TimeSyncPacket field types ────────────────────────────────────── -->
+
+      <!-- 64-bit unsigned: exercises ProtoField.uint64 -->
+      <IntegerParameterType name="UINT64"
+                            shortDescription="64-bit unsigned integer">
+        <IntegerDataEncoding sizeInBits="64" encoding="unsigned"/>
+      </IntegerParameterType>
+
+      <EnumeratedParameterType name="SyncSourceType"
+                               shortDescription="Time synchronisation source">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="INTERNAL" shortDescription="Onboard oscillator (no external sync)"/>
+          <Enumeration value="1" label="GPS"      shortDescription="GPS receiver 1PPS"/>
+          <Enumeration value="2" label="UPLINK"   shortDescription="Ground uplink time-tag"/>
+          <Enumeration value="3" label="GNSS"     shortDescription="Multi-constellation GNSS receiver"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <!-- ── StatusPacket field types ──────────────────────────────────────── -->
+
+      <EnumeratedParameterType name="PowerModeType"
+                               shortDescription="EPS battery charge state">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="CHARGING"/>
+          <Enumeration value="1" label="DISCHARGING"/>
+          <Enumeration value="2" label="BALANCED"/>
+          <Enumeration value="3" label="FAULT"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+      <EnumeratedParameterType name="LinkStateType"
+                               shortDescription="RF link state">
+        <IntegerDataEncoding sizeInBits="8" encoding="unsigned"/>
+        <EnumerationList>
+          <Enumeration value="0" label="IDLE"/>
+          <Enumeration value="1" label="ACQUISITION"/>
+          <Enumeration value="2" label="TRACKING"/>
+          <Enumeration value="3" label="LOCKED"/>
+          <Enumeration value="4" label="LOST"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+
+    </ParameterTypeSet>
+
+    <ParameterSet>
+
+      <!-- ── CCSDS primary header parameters ──────────────────────────────── -->
+      <Parameter name="VersionNumber"   parameterTypeRef="VersionNumberType" shortDescription="CCSDS version (always 0)"/>
+      <Parameter name="PacketType"      parameterTypeRef="PacketTypeEnum"    shortDescription="TM=0, TC=1"/>
+      <Parameter name="SecondaryHdrFlag" parameterTypeRef="SecHdrFlagType"   shortDescription="Secondary header present"/>
+      <Parameter name="APID"            parameterTypeRef="APIDType"          shortDescription="Application Process ID (11-bit discriminator)"/>
+      <Parameter name="SequenceFlags"   parameterTypeRef="SeqFlagsType"      shortDescription="Packet segmentation flags"/>
+      <Parameter name="SequenceCount"   parameterTypeRef="SeqCountType"      shortDescription="Per-APID sequence counter"/>
+      <Parameter name="DataLength"      parameterTypeRef="DataLengthType"    shortDescription="Data field length minus 1 (bytes)"/>
+
+      <!-- ── HKPacket parameters ────────────────────────────────────────────── -->
+      <Parameter name="SCMode"          parameterTypeRef="SCModeType"        shortDescription="Spacecraft mode"/>
+      <Parameter name="Uptime"          parameterTypeRef="UINT32"            shortDescription="Seconds since last OBC reset"/>
+      <Parameter name="BattVoltage"     parameterTypeRef="UINT16"            shortDescription="Battery bus voltage (raw ADC, mV/10)"/>
+      <Parameter name="BattCurrent"     parameterTypeRef="UINT16"            shortDescription="Battery current (raw ADC, mA/10)"/>
+      <Parameter name="BattSOC"         parameterTypeRef="UINT8"             shortDescription="Battery state-of-charge 0–100 percent"/>
+      <Parameter name="CpuLoad"         parameterTypeRef="UINT8"             shortDescription="1-second CPU load average 0–100 percent"/>
+      <Parameter name="CoreTempRaw"     parameterTypeRef="UINT16"            shortDescription="OBC die temperature raw ADC"/>
+      <Parameter name="ResetCount"      parameterTypeRef="UINT8"             shortDescription="OBC reset counter"/>
+      <Parameter name="EclipseFlag"     parameterTypeRef="Bool8Type"         shortDescription="Spacecraft in Earth shadow"/>
+      <Parameter name="FaultFlags"      parameterTypeRef="UINT16"            shortDescription="Active fault bitmask"/>
+
+      <!-- ── SciPacket parameters ────────────────────────────────────────────── -->
+      <Parameter name="SciTimestamp"    parameterTypeRef="GPSTimeType"       shortDescription="GPS time of science frame"/>
+      <Parameter name="IntegTimeUs"     parameterTypeRef="UINT32"            shortDescription="Integration time in microseconds"/>
+      <Parameter name="Ch1Counts"       parameterTypeRef="UINT32"            shortDescription="Channel 1 photon counts"/>
+      <Parameter name="Ch2Counts"       parameterTypeRef="UINT32"            shortDescription="Channel 2 photon counts"/>
+      <Parameter name="CalibratedFlux"  parameterTypeRef="Float64Type"       shortDescription="Calibrated spectral flux (W/m²/nm) — tests ProtoField.double"/>
+      <Parameter name="ReadoutTemp"     parameterTypeRef="Float32Type"       shortDescription="CCD readout temperature (°C)"/>
+      <Parameter name="FrameSerial"     parameterTypeRef="INT32"             shortDescription="Signed frame serial number — tests ProtoField.int32"/>
+
+      <!-- ── EventPacket parameters ─────────────────────────────────────────── -->
+      <Parameter name="EvTimestamp"     parameterTypeRef="GPSTimeType"       shortDescription="Event GPS timestamp"/>
+      <Parameter name="EventId"         parameterTypeRef="UINT16"            shortDescription="Event catalogue number"/>
+      <Parameter name="EventSeverity"   parameterTypeRef="SeverityType"      shortDescription="Event severity level"/>
+      <Parameter name="EventMsg"        parameterTypeRef="AsciiMsg80Type"    shortDescription="Event message text (80 bytes ASCII) — tests ProtoField.string"/>
+
+      <!-- ── DiagPacket parameters (little-endian fields) ─────────────────── -->
+      <Parameter name="DiagVoltageLE"   parameterTypeRef="UINT16LE"          shortDescription="Diagnostic bus voltage (LE uint16) — tests add_le"/>
+      <Parameter name="DiagTempLE"      parameterTypeRef="INT16LE"           shortDescription="Diagnostic temperature signed (LE int16) — tests int16 + add_le"/>
+      <Parameter name="DiagCounterLE"   parameterTypeRef="UINT32LE"          shortDescription="Diagnostic counter (LE uint32) — tests 4-byte add_le"/>
+      <Parameter name="DiagStatus"      parameterTypeRef="UINT8"             shortDescription="Diagnostic status byte (BE uint8)"/>
+      <Parameter name="DiagBlob"        parameterTypeRef="Blob16Type"        shortDescription="16-byte opaque diagnostic blob — tests ProtoField.bytes"/>
+
+      <!-- ── TimeSyncPacket parameters ──────────────────────────────────────── -->
+      <Parameter name="GPSSeconds"      parameterTypeRef="UINT64"            shortDescription="GPS epoch seconds (uint64) — tests ProtoField.uint64"/>
+      <Parameter name="SubsecondsNs"    parameterTypeRef="UINT32"            shortDescription="Sub-second offset in nanoseconds"/>
+      <Parameter name="SyncSource"      parameterTypeRef="SyncSourceType"    shortDescription="Time sync source"/>
+      <Parameter name="TimingValid"     parameterTypeRef="Bool8Type"         shortDescription="Timing solution is valid and locked"/>
+
+      <!-- ── StatusPacket parameters ────────────────────────────────────────── -->
+      <Parameter name="SpacecraftMode"  parameterTypeRef="SCModeType"        shortDescription="Spacecraft operating mode"/>
+      <Parameter name="PowerMode"       parameterTypeRef="PowerModeType"     shortDescription="EPS power mode"/>
+      <Parameter name="LinkState"       parameterTypeRef="LinkStateType"     shortDescription="RF link acquisition state"/>
+      <Parameter name="PayloadActive"   parameterTypeRef="Bool8Type"         shortDescription="Science payload powered and active"/>
+      <Parameter name="LastCmdId"       parameterTypeRef="UINT16"            shortDescription="Most recently accepted command ID"/>
+      <Parameter name="UptimeSec"       parameterTypeRef="UINT32"            shortDescription="Mission elapsed seconds"/>
+
+    </ParameterSet>
+
+    <ContainerSet>
+
+      <!-- ════════════════════════════════════════════════════════════════════
+           CCSDS Primary Header — ABSTRACT BASE
+           True CCSDS bit layout: 3+1+1+11+2+14+16 = 48 bits packed.
+
+           Sequential packing assigns these bit offsets:
+             VersionNumber    → offset 0,  3 bits  (unaligned — uses bitfield)
+             PacketType       → offset 3,  1 bit   (unaligned — uses bitfield)
+             SecondaryHdrFlag → offset 4,  1 bit   (unaligned — uses bitfield)
+             APID             → offset 5, 11 bits  (unaligned — DISCRIMINATOR via bitfield)
+             SequenceFlags    → offset 16, 2 bits  (unaligned — uses bitfield)
+             SequenceCount    → offset 18, 14 bits (unaligned — uses bitfield)
+             DataLength       → offset 32, 16 bits (byte-aligned — uses normal add)
+           ════════════════════════════════════════════════════════════════════ -->
+      <SequenceContainer name="CCSDSPrimaryHeader"
+                         abstract="true"
+                         shortDescription="CCSDS Space Packet primary header — real 48-bit bit-packed layout">
+        <EntryList>
+          <ParameterRefEntry parameterRef="VersionNumber"/>
+          <ParameterRefEntry parameterRef="PacketType"/>
+          <ParameterRefEntry parameterRef="SecondaryHdrFlag"/>
+          <ParameterRefEntry parameterRef="APID"/>
+          <ParameterRefEntry parameterRef="SequenceFlags"/>
+          <ParameterRefEntry parameterRef="SequenceCount"/>
+          <ParameterRefEntry parameterRef="DataLength"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 1. HK packet (APID 100) ─────────────────────────────────────── -->
+      <!-- Covers: uint8, uint16 (raw ADC), uint32, float32, bool8, enum      -->
+      <SequenceContainer name="HKPacket"
+                         shortDescription="Housekeeping telemetry — APID 100">
+        <BaseContainer containerRef="CCSDSPrimaryHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="100" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="SCMode"/>
+          <ParameterRefEntry parameterRef="Uptime"/>
+          <ParameterRefEntry parameterRef="BattVoltage"/>
+          <ParameterRefEntry parameterRef="BattCurrent"/>
+          <ParameterRefEntry parameterRef="BattSOC"/>
+          <ParameterRefEntry parameterRef="CpuLoad"/>
+          <ParameterRefEntry parameterRef="CoreTempRaw"/>
+          <ParameterRefEntry parameterRef="ResetCount"/>
+          <ParameterRefEntry parameterRef="EclipseFlag"/>
+          <ParameterRefEntry parameterRef="FaultFlags"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 2. Science packet (APID 200) ─────────────────────────────────── -->
+      <!-- Covers: uint32, float64 (double), float32, int32 (signed), abstime  -->
+      <SequenceContainer name="SciPacket"
+                         shortDescription="Science instrument data frame — APID 200">
+        <BaseContainer containerRef="CCSDSPrimaryHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="200" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="SciTimestamp"/>
+          <ParameterRefEntry parameterRef="IntegTimeUs"/>
+          <ParameterRefEntry parameterRef="Ch1Counts"/>
+          <ParameterRefEntry parameterRef="Ch2Counts"/>
+          <ParameterRefEntry parameterRef="CalibratedFlux"/>
+          <ParameterRefEntry parameterRef="ReadoutTemp"/>
+          <ParameterRefEntry parameterRef="FrameSerial"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 3. Event packet (APID 300) ───────────────────────────────────── -->
+      <!-- Covers: uint16, enum, string (80-byte ASCII), abstime               -->
+      <SequenceContainer name="EventPacket"
+                         shortDescription="Onboard event log entry — APID 300">
+        <BaseContainer containerRef="CCSDSPrimaryHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="300" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="EvTimestamp"/>
+          <ParameterRefEntry parameterRef="EventId"/>
+          <ParameterRefEntry parameterRef="EventSeverity"/>
+          <ParameterRefEntry parameterRef="EventMsg"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 4. Diagnostic packet (APID 400) ──────────────────────────────── -->
+      <!-- Covers: little-endian uint16/int16/uint32 (add_le), uint8 (BE),     -->
+      <!--         binary bytes blob.  Tests tree:add_le() Lua path.           -->
+      <SequenceContainer name="DiagPacket"
+                         shortDescription="Diagnostic telemetry with little-endian fields — APID 400">
+        <BaseContainer containerRef="CCSDSPrimaryHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="400" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="DiagVoltageLE"/>
+          <ParameterRefEntry parameterRef="DiagTempLE"/>
+          <ParameterRefEntry parameterRef="DiagCounterLE"/>
+          <ParameterRefEntry parameterRef="DiagStatus"/>
+          <ParameterRefEntry parameterRef="DiagBlob"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 5. Time synchronisation packet (APID 500) ────────────────────── -->
+      <!-- Covers: uint64 (tests ProtoField.uint64), uint32, enum, bool8       -->
+      <SequenceContainer name="TimeSyncPacket"
+                         shortDescription="GPS time synchronisation message — APID 500">
+        <BaseContainer containerRef="CCSDSPrimaryHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="500" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="GPSSeconds"/>
+          <ParameterRefEntry parameterRef="SubsecondsNs"/>
+          <ParameterRefEntry parameterRef="SyncSource"/>
+          <ParameterRefEntry parameterRef="TimingValid"/>
+        </EntryList>
+      </SequenceContainer>
+
+      <!-- ── 6. Status summary packet (APID 600) ──────────────────────────── -->
+      <!-- Covers: multiple enum fields with different value tables, bool8,    -->
+      <!--         uint16, uint32.  Tests ProtoField enum tables in Lua.       -->
+      <SequenceContainer name="StatusPacket"
+                         shortDescription="Spacecraft status summary — APID 600">
+        <BaseContainer containerRef="CCSDSPrimaryHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="APID" value="600" comparisonOperator="=="/>
+          </RestrictionCriteria>
+        </BaseContainer>
+        <EntryList>
+          <ParameterRefEntry parameterRef="SpacecraftMode"/>
+          <ParameterRefEntry parameterRef="PowerMode"/>
+          <ParameterRefEntry parameterRef="LinkState"/>
+          <ParameterRefEntry parameterRef="PayloadActive"/>
+          <ParameterRefEntry parameterRef="LastCmdId"/>
+          <ParameterRefEntry parameterRef="UptimeSec"/>
+        </EntryList>
+      </SequenceContainer>
+
+    </ContainerSet>
+
+  </TelemetryMetaData>
+
+</SpaceSystem>
