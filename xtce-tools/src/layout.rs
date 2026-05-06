@@ -124,7 +124,7 @@ pub struct LeafContainer {
     pub name: String,
     /// Slash-joined path through the SpaceSystem hierarchy.
     pub full_path: String,
-    pub discriminator: Option<DiscriminatorInfo>,
+    pub discriminators: Option<Vec<DiscriminatorInfo>>,
     pub fields: Vec<FieldLayout>,
     /// Total packet payload size in bits (may be 0 if no fields).
     pub total_bits: u32,
@@ -431,16 +431,16 @@ fn compute_offsets(pending: Vec<PendingField>) -> Vec<FieldLayout> {
 /// restriction criteria, if one is present.  `ComparisonList` uses the first
 /// equality comparison found.  Non-equality operators and `BooleanExpression`
 /// variants return `None`.
-fn extract_discriminator(base: &BaseContainer) -> Option<DiscriminatorInfo> {
+fn extract_discriminator(base: &BaseContainer) -> Option<Vec<DiscriminatorInfo>> {
     let rc = base.restriction_criteria.as_ref()?;
     match rc {
         RestrictionCriteria::Comparison(c) => {
             if c.comparison_operator == ComparisonOperator::Equality {
                 let value = c.value.parse::<i64>().ok()?;
-                Some(DiscriminatorInfo {
+                vec![Some(DiscriminatorInfo {
                     param_name: c.parameter_ref.clone(),
                     value,
-                })
+                })];
             } else {
                 None
             }
@@ -496,7 +496,7 @@ pub fn find_leaf_containers(root: &SpaceSystem) -> Vec<LeafContainer> {
             continue;
         }
 
-        let discriminator = container
+        let discriminators = container
             .base_container
             .as_ref()
             .and_then(extract_discriminator);
@@ -513,7 +513,7 @@ pub fn find_leaf_containers(root: &SpaceSystem) -> Vec<LeafContainer> {
         leaves.push(LeafContainer {
             name: name.clone(),
             full_path: full_path.clone(),
-            discriminator,
+            discriminators,
             fields,
             total_bits,
         });
@@ -964,5 +964,318 @@ mod tests {
         let leaves = find_leaf_containers(&ss);
         assert_eq!(leaves.len(), 1, "Base must not appear when Child also uses it");
         assert_eq!(leaves[0].name, "Child");
+    }
+
+    // ── Integration: advanced_mission.xml ────────────────────────────────────
+
+    fn parse_test_file(name: &str) -> xtce_core::model::space_system::SpaceSystem {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test_data")
+            .join(name);
+        xtce_core::parser::parse_file(&path)
+            .unwrap_or_else(|e| panic!("{name} should parse without errors: {e}"))
+    }
+
+    /// advanced_mission.xml must produce exactly 9 leaf containers.
+    #[test]
+    fn advanced_mission_leaf_count() {
+        let ss = parse_test_file("advanced_mission.xml");
+        let leaves = find_leaf_containers(&ss);
+        let mut names: Vec<&str> = leaves.iter().map(|l| l.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["ADCSPacket", "CalPacket", "CommPacket", "EventPacket",
+             "HKPacket", "OBCPacket", "PowerPacket", "SciPacket", "ThermalPacket"],
+            "expected 9 named leaf containers"
+        );
+    }
+
+    /// Every leaf in advanced_mission.xml should discriminate on APID.
+    #[test]
+    fn advanced_mission_all_discriminators_on_apid() {
+        let ss = parse_test_file("advanced_mission.xml");
+        let leaves = find_leaf_containers(&ss);
+        for leaf in &leaves {
+            let disc = leaf.discriminator.as_ref()
+                .unwrap_or_else(|| panic!("{} must have a discriminator", leaf.name));
+            assert_eq!(disc.param_name, "APID",
+                "{} discriminator must be on APID, got {}", leaf.name, disc.param_name);
+        }
+    }
+
+    /// Verify all 9 APID discriminator values are distinct and correct.
+    #[test]
+    fn advanced_mission_discriminator_values() {
+        let ss = parse_test_file("advanced_mission.xml");
+        let leaves = find_leaf_containers(&ss);
+
+        let apid = |name: &str| -> i64 {
+            leaves.iter().find(|l| l.name == name)
+                .unwrap_or_else(|| panic!("{name} not found"))
+                .discriminator.as_ref().unwrap().value
+        };
+        assert_eq!(apid("HKPacket"),      100);
+        assert_eq!(apid("PowerPacket"),   110);
+        assert_eq!(apid("ThermalPacket"), 120);
+        assert_eq!(apid("CommPacket"),    130);
+        assert_eq!(apid("OBCPacket"),     140);
+        assert_eq!(apid("EventPacket"),   150); // ComparisonList — first equality is APID==150
+        assert_eq!(apid("ADCSPacket"),    200);
+        assert_eq!(apid("SciPacket"),     300);
+        assert_eq!(apid("CalPacket"),     301);
+    }
+
+    /// HKPacket should inherit 3 header fields (APID/SeqCount/DataLength) then
+    /// carry its own 7 payload fields — 10 visible fields total.
+    /// Verify the first three (from CCSDSHeader) and a sample payload field.
+    #[test]
+    fn advanced_mission_hkpacket_fields_and_offsets() {
+        let ss = parse_test_file("advanced_mission.xml");
+        let leaves = find_leaf_containers(&ss);
+        let hk = leaves.iter().find(|l| l.name == "HKPacket").unwrap();
+        let fields = visible_fields(hk);
+
+        // Inherited bit-packed CCSDS primary header (7 fields, 48 bits total)
+        assert_eq!(fields[0].name, "VersionNumber"); assert_eq!(fields[0].bit_offset,  0);
+        assert_eq!(fields[0].type_info.size_in_bits(), 3);
+        assert_eq!(fields[1].name, "PacketType");    assert_eq!(fields[1].bit_offset,  3);
+        assert_eq!(fields[1].type_info.size_in_bits(), 1);
+        assert_eq!(fields[2].name, "SecHdrFlag");    assert_eq!(fields[2].bit_offset,  4);
+        assert_eq!(fields[2].type_info.size_in_bits(), 1);
+        assert_eq!(fields[3].name, "APID");          assert_eq!(fields[3].bit_offset,  5);
+        assert_eq!(fields[3].type_info.size_in_bits(), 11);
+        assert_eq!(fields[4].name, "SeqFlags");      assert_eq!(fields[4].bit_offset, 16);
+        assert_eq!(fields[4].type_info.size_in_bits(), 2);
+        assert_eq!(fields[5].name, "SeqCount");      assert_eq!(fields[5].bit_offset, 18);
+        assert_eq!(fields[5].type_info.size_in_bits(), 14);
+        assert_eq!(fields[6].name, "DataLength");    assert_eq!(fields[6].bit_offset, 32);
+        assert_eq!(fields[6].type_info.size_in_bits(), 16);
+
+        // First payload field — starts at bit 48 (right after the 6-byte header)
+        assert_eq!(fields[7].name, "SCMode");        assert_eq!(fields[7].bit_offset, 48);
+        // MET is RelativeTime → Unknown{32} in layout, offset 56
+        assert_eq!(fields[8].name, "MET");           assert_eq!(fields[8].bit_offset, 56);
+        assert_eq!(fields[8].type_info.size_in_bits(), 32);
+
+        assert_eq!(fields.len(), 14, "HKPacket: 7 header fields + 7 payload fields = 14 total");
+    }
+
+    /// ADCSPacket (child SpaceSystem ADCS) inherits CCSDSHeader from parent scope
+    /// and adds 11 local fields — 14 total.
+    #[test]
+    fn advanced_mission_adcspacket_inherits_parent_header() {
+        let ss = parse_test_file("advanced_mission.xml");
+        let leaves = find_leaf_containers(&ss);
+        let adcs = leaves.iter().find(|l| l.name == "ADCSPacket").unwrap();
+        let fields = visible_fields(adcs);
+
+        // Header from parent scope — 7 bit-packed fields
+        assert_eq!(fields[0].name, "VersionNumber");
+        assert_eq!(fields[0].bit_offset, 0);
+        assert_eq!(fields[3].name, "APID");
+        assert_eq!(fields[3].bit_offset, 5);
+        assert_eq!(fields[3].type_info.size_in_bits(), 11);
+        // First ADCS-specific field comes right after DataLength (bit 48)
+        assert_eq!(fields[7].name, "Q0");
+        assert_eq!(fields[7].bit_offset, 48);
+        assert_eq!(fields[7].type_info.size_in_bits(), 32, "Q0 is FLOAT32 = 32 bits");
+
+        assert_eq!(fields.len(), 18, "ADCSPacket: 7 header + 11 payload = 18 fields");
+    }
+
+    /// CalPacket uses 64-bit SciMeasurementType (FLOAT64).
+    /// CalState uses the ENABLE type (8-bit boolean) so that CalProgress,
+    /// CalTargetCh, CalReference and CalDark all remain byte-aligned.
+    #[test]
+    fn advanced_mission_calpacket_has_float64_fields() {
+        let ss = parse_test_file("advanced_mission.xml");
+        let leaves = find_leaf_containers(&ss);
+        let cal = leaves.iter().find(|l| l.name == "CalPacket").unwrap();
+        let fields = visible_fields(cal);
+
+        // CalState (ENABLE = 8-bit bool) at bit 48 (byte 6, after 6-byte CCSDS header)
+        let cal_state = fields.iter().find(|f| f.name == "CalState")
+            .expect("CalState field must exist");
+        assert_eq!(cal_state.bit_offset, 48, "CalState starts immediately after the 6-byte CCSDS header");
+        assert_eq!(cal_state.type_info.size_in_bits(), 8,
+            "CalState uses ENABLE (8-bit) so subsequent fields are byte-aligned");
+
+        // CalReference and CalDark are SciMeasurementType (FLOAT64 = 64 bits).
+        // With CalState as 8-bit, CalProgress at 56, CalTargetCh at 64,
+        // CalReference at 72 (byte 9) and CalDark at 136 (byte 17) — both byte-aligned.
+        let cal_ref = fields.iter().find(|f| f.name == "CalReference")
+            .expect("CalReference field must exist");
+        assert_eq!(cal_ref.type_info.size_in_bits(), 64, "CalReference is FLOAT64 = 64 bits");
+        assert_eq!(cal_ref.bit_offset, 72,
+            "CalReference must be byte-aligned at bit 72 (byte 9)");
+
+        let cal_dark = fields.iter().find(|f| f.name == "CalDark")
+            .expect("CalDark field must exist");
+        assert_eq!(cal_dark.type_info.size_in_bits(), 64, "CalDark is FLOAT64 = 64 bits");
+        assert_eq!(cal_dark.bit_offset, 136,
+            "CalDark must be byte-aligned at bit 136 (byte 17)");
+    }
+
+    // ── Integration: ccsds_realworld.xml ─────────────────────────────────────
+
+    /// ccsds_realworld.xml must produce exactly 6 leaf containers.
+    #[test]
+    fn ccsds_realworld_leaf_count() {
+        let ss = parse_test_file("ccsds_realworld.xml");
+        let leaves = find_leaf_containers(&ss);
+        let mut names: Vec<&str> = leaves.iter().map(|l| l.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["DiagPacket", "EventPacket", "HKPacket", "SciPacket",
+             "StatusPacket", "TimeSyncPacket"],
+        );
+    }
+
+    /// All 6 leaves discriminate on APID with distinct values.
+    #[test]
+    fn ccsds_realworld_discriminator_values() {
+        let ss = parse_test_file("ccsds_realworld.xml");
+        let leaves = find_leaf_containers(&ss);
+
+        let apid = |name: &str| -> i64 {
+            leaves.iter().find(|l| l.name == name)
+                .unwrap_or_else(|| panic!("{name} not found"))
+                .discriminator.as_ref()
+                .unwrap_or_else(|| panic!("{name} must have a discriminator"))
+                .value
+        };
+        assert_eq!(apid("HKPacket"),       100);
+        assert_eq!(apid("SciPacket"),      200);
+        assert_eq!(apid("EventPacket"),    300);
+        assert_eq!(apid("DiagPacket"),     400);
+        assert_eq!(apid("TimeSyncPacket"), 500);
+        assert_eq!(apid("StatusPacket"),   600);
+    }
+
+    /// The APID discriminator must be at bit offset 5, size 11 (true CCSDS layout).
+    /// The dissector will emit: buf(0, 2):bitfield(5, 11)
+    #[test]
+    fn ccsds_realworld_apid_at_bit_offset_5() {
+        let ss = parse_test_file("ccsds_realworld.xml");
+        let leaves = find_leaf_containers(&ss);
+
+        // Check that APID field is at the correct offset in every leaf
+        for leaf in &leaves {
+            let apid_field = visible_fields(leaf)
+                .into_iter()
+                .find(|f| f.name == "APID")
+                .unwrap_or_else(|| panic!("{}: APID field not found in flattened fields", leaf.name));
+            assert_eq!(apid_field.bit_offset, 5,
+                "{}: APID must be at bit offset 5 (after 3+1+1 header bits)", leaf.name);
+            assert_eq!(apid_field.type_info.size_in_bits(), 11,
+                "{}: APID must be 11 bits wide", leaf.name);
+        }
+    }
+
+    /// Verify the full CCSDS primary header field offsets in HKPacket.
+    #[test]
+    fn ccsds_realworld_hkpacket_header_offsets() {
+        let ss = parse_test_file("ccsds_realworld.xml");
+        let leaves = find_leaf_containers(&ss);
+        let hk = leaves.iter().find(|l| l.name == "HKPacket").unwrap();
+        let fields = visible_fields(hk);
+
+        // CCSDS primary header — real bit packing
+        assert_eq!(fields[0].name, "VersionNumber");     assert_eq!(fields[0].bit_offset, 0);
+        assert_eq!(fields[0].type_info.size_in_bits(), 3);
+        assert_eq!(fields[1].name, "PacketType");        assert_eq!(fields[1].bit_offset, 3);
+        assert_eq!(fields[1].type_info.size_in_bits(), 1);
+        assert_eq!(fields[2].name, "SecondaryHdrFlag");  assert_eq!(fields[2].bit_offset, 4);
+        assert_eq!(fields[2].type_info.size_in_bits(), 1);
+        assert_eq!(fields[3].name, "APID");              assert_eq!(fields[3].bit_offset, 5);
+        assert_eq!(fields[3].type_info.size_in_bits(), 11);
+        assert_eq!(fields[4].name, "SequenceFlags");     assert_eq!(fields[4].bit_offset, 16);
+        assert_eq!(fields[4].type_info.size_in_bits(), 2);
+        assert_eq!(fields[5].name, "SequenceCount");     assert_eq!(fields[5].bit_offset, 18);
+        assert_eq!(fields[5].type_info.size_in_bits(), 14);
+        assert_eq!(fields[6].name, "DataLength");        assert_eq!(fields[6].bit_offset, 32);
+        assert_eq!(fields[6].type_info.size_in_bits(), 16);
+
+        // First payload field starts right after the 48-bit primary header
+        assert_eq!(fields[7].name, "SCMode");            assert_eq!(fields[7].bit_offset, 48);
+    }
+
+    /// TimeSyncPacket must have a 64-bit GPSSeconds field.
+    #[test]
+    fn ccsds_realworld_timesync_has_uint64() {
+        let ss = parse_test_file("ccsds_realworld.xml");
+        let leaves = find_leaf_containers(&ss);
+        let ts = leaves.iter().find(|l| l.name == "TimeSyncPacket").unwrap();
+        let fields = visible_fields(ts);
+
+        let gps = fields.iter().find(|f| f.name == "GPSSeconds")
+            .expect("GPSSeconds must be in TimeSyncPacket");
+        assert_eq!(gps.type_info.size_in_bits(), 64, "GPSSeconds must be 64-bit");
+        // Must be byte-aligned (offset 48 = 6 bytes into packet)
+        assert_eq!(gps.bit_offset, 48, "GPSSeconds starts right after 48-bit CCSDS header");
+    }
+
+    /// DiagPacket little-endian fields must have correct byte-order flags.
+    #[test]
+    fn ccsds_realworld_diagpacket_le_fields() {
+        let ss = parse_test_file("ccsds_realworld.xml");
+        let leaves = find_leaf_containers(&ss);
+        let diag = leaves.iter().find(|l| l.name == "DiagPacket").unwrap();
+        let fields = visible_fields(diag);
+
+        let find_field = |name: &str| {
+            fields.iter().find(|f| f.name == name)
+                .unwrap_or_else(|| panic!("DiagPacket: {name} not found"))
+        };
+
+        // LE uint16 at byte offset 6 (bit 48) — after 48-bit CCSDS header
+        let v = find_field("DiagVoltageLE");
+        assert_eq!(v.bit_offset, 48);
+        assert_eq!(v.type_info.size_in_bits(), 16);
+        assert!(matches!(&v.type_info,
+            TypeInfo::Integer { byte_order_lsb: true, .. }),
+            "DiagVoltageLE must be LE");
+
+        // LE int16 signed
+        let t = find_field("DiagTempLE");
+        assert!(matches!(&t.type_info,
+            TypeInfo::Integer { signed: true, byte_order_lsb: true, .. }),
+            "DiagTempLE must be signed LE");
+
+        // LE uint32
+        let c = find_field("DiagCounterLE");
+        assert_eq!(c.type_info.size_in_bits(), 32);
+        assert!(matches!(&c.type_info,
+            TypeInfo::Integer { byte_order_lsb: true, .. }),
+            "DiagCounterLE must be LE");
+
+        // DiagBlob is binary — 128 bits (16 bytes)
+        let blob = find_field("DiagBlob");
+        assert_eq!(blob.type_info.size_in_bits(), 128, "DiagBlob must be 128 bits");
+        assert!(matches!(&blob.type_info, TypeInfo::Binary { .. }),
+            "DiagBlob must be TypeInfo::Binary");
+    }
+
+    /// SciPacket must have a float64 (double) field and a signed int32 field.
+    #[test]
+    fn ccsds_realworld_scipacket_field_types() {
+        let ss = parse_test_file("ccsds_realworld.xml");
+        let leaves = find_leaf_containers(&ss);
+        let sci = leaves.iter().find(|l| l.name == "SciPacket").unwrap();
+        let fields = visible_fields(sci);
+
+        let flux = fields.iter().find(|f| f.name == "CalibratedFlux")
+            .expect("CalibratedFlux must be in SciPacket");
+        assert_eq!(flux.type_info.size_in_bits(), 64, "CalibratedFlux must be float64");
+        assert!(matches!(&flux.type_info, TypeInfo::Float { size_in_bits: 64, .. }),
+            "CalibratedFlux must be TypeInfo::Float{{64}}");
+
+        let serial = fields.iter().find(|f| f.name == "FrameSerial")
+            .expect("FrameSerial must be in SciPacket");
+        assert!(matches!(&serial.type_info,
+            TypeInfo::Integer { signed: true, size_in_bits: 32, .. }),
+            "FrameSerial must be signed int32");
     }
 }

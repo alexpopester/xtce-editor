@@ -39,6 +39,9 @@ enum Commands {
     GenDissector {
         /// Path to the XTCE XML file.
         input: PathBuf,
+        /// Flags the XTCE as needing dynamic packet identification. Will build the Lua dissector accordingly.
+        #[arg(short, long)]
+        dynamic_identification: bool,
         /// UDP port the dissector listens on.
         #[arg(short, long, default_value = "4321")]
         port: u16,
@@ -63,7 +66,7 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::GenDissector { input, port, output } => {
+        Commands::GenDissector { input, dynamic_identification, port, output } => {
             let ss = load_xtce(&input);
             let leaves = layout::find_leaf_containers(&ss);
 
@@ -73,7 +76,7 @@ fn main() {
                 eprintln!("Found {} leaf container(s).", leaves.len());
             }
 
-            let lua = dissector::generate_lua(&leaves, port);
+            let lua = dissector::generate_lua(&leaves, port, dynamic_identification);
             let out_path = output.unwrap_or_else(|| default_output(&input, ".lua"));
             fs::write(&out_path, lua.as_bytes()).unwrap_or_else(|e| {
                 eprintln!("Error writing {:?}: {e}", out_path);

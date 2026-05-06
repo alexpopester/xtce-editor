@@ -32,7 +32,7 @@ use xtce_core::model::types::ValueEnumeration;
 /// single-parameter equality discriminator (e.g. an APID field), the
 /// dissector dispatches by that value.  Otherwise it shows all fields of all
 /// containers without dispatch.
-pub fn generate_lua(leaves: &[LeafContainer], port: u16) -> String {
+pub fn generate_lua(leaves: &[LeafContainer], port: u16, use_dynamic_identification: bool) -> String {
     let mut out = String::with_capacity(4096);
 
     out.push_str("-- Auto-generated XTCE Wireshark Lua dissector\n");
@@ -69,9 +69,16 @@ pub fn generate_lua(leaves: &[LeafContainer], port: u16) -> String {
     }
 
     // ── Discriminator map (if applicable) ──────────────────────────────────
-    let discriminator_param = detect_common_discriminator(leaves);
+    let discriminator_param: Option<Vec<String>>;
+    if !use_dynamic_identification{
+        discriminator_param = detect_common_discriminator(leaves);
+    }
+    else {
+        todo!("Implement dynamic identification within the lua dissector");
+    }
 
-    if let Some(param_name) = &discriminator_param {
+    if let Some(params) = &discriminator_param {
+        let param_name = params[0].as_str();
         out.push_str("-- Discriminator dispatch map\n");
         out.push_str("local XTCE_MAP = {\n");
         for lc in leaves {
@@ -240,6 +247,11 @@ fn emit_container_function(out: &mut String, lc: &LeafContainer) {
         "local function dissect_{fn_name}(buf, pkt, tree)\n"
     ));
 
+    // Label the protocol tree item and Info column with the packet name so
+    // Wireshark shows "XTCE: HKPacket" instead of the generic "XTCE Telemetry".
+    out.push_str(&format!("    tree:set_text(\"XTCE: {}\")\n", lc.name));
+    out.push_str(&format!("    pkt.cols.info = \"{}\"\n", lc.name));
+
     for field in &lc.fields {
         if field.name.starts_with("_pad_") {
             continue;
@@ -262,15 +274,22 @@ fn is_lsb(ti: &TypeInfo) -> bool {
 /// Emit one `tree:add(...)` line for a field.
 ///
 /// Byte-aligned fields use `tree:add` (big-endian) or `tree:add_le`
-/// (little-endian).  Unaligned fields always use `buf():bitfield()`, which
-/// reads bits in big-endian order — little-endian bit-packed fields are not
-/// supported by Wireshark's Lua API and are emitted as big-endian with a
-/// comment warning.
+/// (little-endian).  Unaligned integer/bool/enum fields use `buf():bitfield()`,
+/// which reads bits in big-endian order.
+///
+/// Float/double fields that are not byte-aligned cannot be correctly decoded
+/// via `bitfield()` because that call returns a Lua integer, and passing an
+/// integer bit-pattern as the value to `tree:add(ProtoField.double, ...)` would
+/// display the literal integer instead of the reinterpreted float.  For those
+/// fields we emit a WARNING comment and fall back to reading from the nearest
+/// byte boundary (the value will be off by `bit_off % 8` bits, but it is at
+/// least the correct type and won't produce garbage or a Wireshark error).
 fn emit_field_add(out: &mut String, container_id: &str, field: &FieldLayout) {
     let key = format!("{}.{}", container_id, lua_id(&field.name));
     let size = field.type_info.size_in_bits();
     let bit_off = field.bit_offset;
     let lsb = is_lsb(&field.type_info);
+    let is_float = matches!(&field.type_info, TypeInfo::Float { .. });
 
     if bit_off % 8 == 0 && size % 8 == 0 {
         // Byte-aligned — simple slice with correct endian method.
@@ -281,8 +300,25 @@ fn emit_field_add(out: &mut String, container_id: &str, field: &FieldLayout) {
             "    if buf:len() >= {} then tree:{add_fn}(F[\"{key}\"], buf({byte_off}, {byte_len})) end\n",
             byte_off + byte_len
         ));
+    } else if is_float {
+        // Float/double fields at a non-byte-aligned offset: bitfield() returns
+        // an integer, which would be misinterpreted by ProtoField.float/double.
+        // Warn and fall back to reading from the nearest byte boundary.
+        let byte_off = bit_off / 8;
+        let bit_in_byte = bit_off % 8;
+        let byte_len = size / 8; // 4 for float32, 8 for float64
+        out.push_str(&format!(
+            "    -- WARNING: {key} is a float/double at non-byte-aligned offset \
+             ({bit_off} bits, {bit_in_byte} bits into byte {byte_off}); \
+             decoded from byte boundary — value may differ by up to {bit_in_byte} bits\n"
+        ));
+        out.push_str(&format!(
+            "    if buf:len() >= {} then tree:add(F[\"{key}\"], buf({byte_off}, {byte_len})) end\n",
+            byte_off + byte_len
+        ));
     } else {
-        // Sub-byte or unaligned — use bitfield() (big-endian bit order only).
+        // Sub-byte or unaligned integer/bool/enum — use bitfield() (big-endian
+        // bit order only).
         let byte_off = bit_off / 8;
         let bit_in_byte = bit_off % 8;
         let byte_span = ((bit_in_byte + size) + 7) / 8;
@@ -305,7 +341,7 @@ fn emit_field_add(out: &mut String, container_id: &str, field: &FieldLayout) {
 
 /// If all leaf containers with discriminators share the same parameter name,
 /// return that name.
-fn detect_common_discriminator(leaves: &[LeafContainer]) -> Option<String> {
+fn detect_common_discriminator(leaves: &[LeafContainer]) -> Option<Vec<String>> {
     let discriminated: Vec<_> = leaves.iter().filter(|l| l.discriminator.is_some()).collect();
     if discriminated.is_empty() {
         return None;
@@ -315,7 +351,7 @@ fn detect_common_discriminator(leaves: &[LeafContainer]) -> Option<String> {
         .iter()
         .all(|l| l.discriminator.as_ref().unwrap().param_name == first)
     {
-        Some(first)
+        Some(vec![first])
     } else {
         None
     }
@@ -390,7 +426,7 @@ mod tests {
             make_leaf("PktA", Some(make_disc("APID", 100)), vec![disc.clone()]),
             make_leaf("PktB", Some(make_disc("APID", 200)), vec![disc.clone()]),
         ];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
 
         assert!(lua.contains("XTCE_MAP"), "dispatch map should be present");
         assert!(lua.contains("[100] = dissect_pkta"), "APID 100 → PktA");
@@ -407,7 +443,7 @@ mod tests {
             make_leaf("PktA", Some(make_disc("APID", 100)), vec![disc.clone()]),
             make_leaf("Common", None, vec![uint_field("Status", 0, 8, false)]),
         ];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
 
         assert!(lua.contains("XTCE_MAP"), "dispatch map should be present");
         assert!(lua.contains("[100] = dissect_pkta"), "APID 100 → PktA");
@@ -427,7 +463,7 @@ mod tests {
             make_leaf("PktA", None, vec![uint_field("A", 0, 8, false)]),
             make_leaf("PktB", None, vec![uint_field("B", 0, 8, false)]),
         ];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
 
         assert!(!lua.contains("XTCE_MAP"), "no dispatch map without discriminators");
         assert!(lua.contains("dissect_pkta(buf, pkt, subtree)"));
@@ -440,7 +476,7 @@ mod tests {
     #[test]
     fn test_le_field_uses_add_le() {
         let leaves = vec![make_leaf("Pkt", None, vec![uint_field("Val", 0, 16, true)])];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         assert!(lua.contains("tree:add_le(F[\"pkt.val\"]"),
             "LE byte-aligned field must use add_le");
     }
@@ -449,7 +485,7 @@ mod tests {
     #[test]
     fn test_be_field_uses_add() {
         let leaves = vec![make_leaf("Pkt", None, vec![uint_field("Val", 0, 16, false)])];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         assert!(lua.contains("tree:add(F[\"pkt.val\"]"),
             "BE byte-aligned field must use add");
         assert!(!lua.contains("add_le"),
@@ -461,7 +497,7 @@ mod tests {
     fn test_unaligned_field_uses_bitfield() {
         // bit_offset=5, size=3 → neither byte-aligned nor byte-sized
         let leaves = vec![make_leaf("Pkt", None, vec![unaligned_field("Val", 5, 3, false)])];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         assert!(lua.contains(":bitfield("),
             "unaligned field must use bitfield");
     }
@@ -470,7 +506,7 @@ mod tests {
     #[test]
     fn test_unaligned_le_field_emits_warning_and_bitfield() {
         let leaves = vec![make_leaf("Pkt", None, vec![unaligned_field("Val", 5, 3, true)])];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         assert!(lua.contains("WARNING"),
             "unaligned LE field must emit a WARNING comment");
         assert!(lua.contains(":bitfield("),
@@ -487,7 +523,7 @@ mod tests {
             make_leaf("PktA", Some(make_disc("APID", 100)), vec![disc.clone()]),
             make_leaf("PktB", Some(make_disc("APID", 200)), vec![disc.clone()]),
         ];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         assert!(lua.contains(":le_uint()"),
             "LE discriminator field must use le_uint()");
         assert!(!lua.contains(":uint()"),
@@ -503,7 +539,7 @@ mod tests {
             make_leaf("PktA", Some(make_disc("TypeId", 1)), vec![disc.clone()]),
             make_leaf("PktB", Some(make_disc("TypeId", 2)), vec![disc.clone()]),
         ];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         assert!(lua.contains(":bitfield("),
             "unaligned discriminator must use bitfield()");
         assert!(!lua.contains(":uint()"),
@@ -519,7 +555,7 @@ mod tests {
     fn test_unaligned_field_add_uses_tvbrange_and_value() {
         // bit_offset=5, size=3 → byte_off=0, bit_in_byte=5, byte_span=1
         let leaves = vec![make_leaf("Pkt", None, vec![unaligned_field("Val", 5, 3, false)])];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         assert!(
             lua.contains("tree:add(F[\"pkt.val\"], buf(0, 1), buf(0, 1):bitfield(5, 3))"),
             "unaligned field must use tree:add(field, tvbrange, bitfield_value) — got:\n{lua}"
@@ -530,7 +566,7 @@ mod tests {
     #[test]
     fn test_aligned_field_add_uses_two_arg_form() {
         let leaves = vec![make_leaf("Pkt", None, vec![uint_field("Val", 0, 16, false)])];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         // Two-arg form: tree:add(field, buf(off, len))
         assert!(
             lua.contains("tree:add(F[\"pkt.val\"], buf(0, 2))"),
@@ -549,7 +585,7 @@ mod tests {
     #[test]
     fn test_proto_field_type_for_11bit_integer() {
         let leaves = vec![make_leaf("Pkt", None, vec![unaligned_field("APID", 0, 11, false)])];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         assert!(
             lua.contains("ProtoField.uint16("),
             "11-bit field must map to uint16 (fits in 2 bytes)"
@@ -569,7 +605,7 @@ mod tests {
             uint_field("C", 24, 32, false),
             uint_field("D", 56, 64, false),
         ])];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
         assert!(lua.contains("ProtoField.uint8("),  "8-bit → uint8");
         assert!(lua.contains("ProtoField.uint16("), "16-bit → uint16");
         assert!(lua.contains("ProtoField.uint32("), "32-bit → uint32");
@@ -587,7 +623,7 @@ mod tests {
             make_leaf("PktA", Some(make_disc("APID", 100)), vec![disc.clone()]),
             make_leaf("PktB", Some(make_disc("APID", 200)), vec![disc.clone()]),
         ];
-        let lua = generate_lua(&leaves, 4321);
+        let lua = generate_lua(&leaves, 4321, false);
 
         let tmp_path = std::env::temp_dir().join("xtce_test_dissector.lua");
         std::fs::write(&tmp_path, lua.as_bytes()).expect("write temp lua file");
@@ -609,6 +645,506 @@ mod tests {
             }
             Err(e) => panic!("failed to run luac: {e}"),
         }
+    }
+
+    // ── Full-pipeline Lua output tests for new sample files ──────────────────
+
+    fn parse_and_generate(file_name: &str) -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test_data")
+            .join(file_name);
+        let ss = xtce_core::parser::parse_file(&path)
+            .unwrap_or_else(|e| panic!("{file_name}: parse failed: {e}"));
+        let leaves = crate::layout::find_leaf_containers(&ss);
+        generate_lua(&leaves, 4321, false)
+    }
+
+    // ── advanced_mission.xml Lua tests ────────────────────────────────────────
+
+    /// All 9 packet dissect functions must appear in the generated Lua.
+    #[test]
+    fn advanced_mission_lua_has_all_dissect_functions() {
+        let lua = parse_and_generate("advanced_mission.xml");
+        for name in &["hkpacket", "powerpacket", "thermalpacket", "commpacket",
+                      "obcpacket", "eventpacket", "adcspacket", "scipacket", "calpacket"] {
+            assert!(lua.contains(&format!("local function dissect_{name}(")),
+                "dissect_{name} function must be present");
+        }
+    }
+
+    /// The dispatch map must contain all 9 APID values.
+    #[test]
+    fn advanced_mission_lua_dispatch_map_complete() {
+        let lua = parse_and_generate("advanced_mission.xml");
+        assert!(lua.contains("XTCE_MAP"), "dispatch map must be present");
+        for apid in &[100, 110, 120, 130, 140, 150, 200, 300, 301] {
+            assert!(lua.contains(&format!("[{apid}]")),
+                "XTCE_MAP must contain entry for APID {apid}");
+        }
+    }
+
+    /// 11-bit APID at bit offset 5 → discriminator uses buf(0, 2):bitfield(5, 11).
+    /// Both advanced_mission and ccsds_realworld now use the identical bit-packed
+    /// CCSDS primary header layout.
+    #[test]
+    fn advanced_mission_lua_discriminator_uses_bitfield() {
+        let lua = parse_and_generate("advanced_mission.xml");
+        // Discriminator must extract the 11-bit APID from the unaligned position.
+        assert!(lua.contains("buf(0, 2):bitfield(5, 11)"),
+            "11-bit APID at bit offset 5 must use bitfield(5, 11) for the discriminator");
+        // Must NOT use the byte-aligned :uint() path (that was the old 16-bit APID)
+        assert!(!lua.contains(":uint()"),
+            "old byte-aligned :uint() discriminator must not appear after CCSDS header fix");
+    }
+
+    /// Enum types must produce Lua enum tables in ProtoField declarations.
+    #[test]
+    fn advanced_mission_lua_enum_tables() {
+        let lua = parse_and_generate("advanced_mission.xml");
+        // SpacecraftModeType has STANDBY/NOMINAL/SCIENCE/ECLIPSE/SAFE/CONTINGENCY
+        assert!(lua.contains("\"STANDBY\""),  "STANDBY enum label must appear");
+        assert!(lua.contains("\"NOMINAL\""),  "NOMINAL enum label must appear");
+        assert!(lua.contains("\"SCIENCE\""),  "SCIENCE enum label must appear");
+        assert!(lua.contains("\"SAFE\""),     "SAFE enum label must appear");
+        // SeverityType
+        assert!(lua.contains("\"CRITICAL\""), "CRITICAL severity label must appear");
+        assert!(lua.contains("\"WARNING\""),  "WARNING severity label must appear");
+        // SubsystemType
+        assert!(lua.contains("\"PAYLOAD\""),  "PAYLOAD subsystem label must appear");
+    }
+
+    /// Signed INT8 fields (dBmType on TxPower/RxSignal) must use ProtoField.int8.
+    #[test]
+    fn advanced_mission_lua_signed_int8_fields() {
+        let lua = parse_and_generate("advanced_mission.xml");
+        assert!(lua.contains("ProtoField.int8("),
+            "signed INT8 fields must produce ProtoField.int8");
+    }
+
+    /// Signed INT16 fields (CurrentType on BattCurrent) must use ProtoField.int16.
+    #[test]
+    fn advanced_mission_lua_signed_int16_field() {
+        let lua = parse_and_generate("advanced_mission.xml");
+        assert!(lua.contains("ProtoField.int16("),
+            "signed INT16 BattCurrent must produce ProtoField.int16");
+    }
+
+    /// Boolean fields must use ProtoField.bool.
+    #[test]
+    fn advanced_mission_lua_bool_fields() {
+        let lua = parse_and_generate("advanced_mission.xml");
+        assert!(lua.contains("ProtoField.bool("),
+            "boolean fields must produce ProtoField.bool");
+    }
+
+    /// String field (EventMessage/AsciiString128) must use ProtoField.string.
+    #[test]
+    fn advanced_mission_lua_string_field() {
+        let lua = parse_and_generate("advanced_mission.xml");
+        assert!(lua.contains("ProtoField.string("),
+            "AsciiString128 field must produce ProtoField.string");
+    }
+
+    /// Binary field (SciChecksum/Checksum32Type) must use ProtoField.bytes.
+    #[test]
+    fn advanced_mission_lua_binary_field() {
+        let lua = parse_and_generate("advanced_mission.xml");
+        assert!(lua.contains("ProtoField.bytes("),
+            "binary/checksum field must produce ProtoField.bytes");
+    }
+
+    /// CalPacket's float64 fields (CalReference, CalDark) must be decoded with
+    /// byte-aligned `tree:add` rather than `bitfield()`.
+    ///
+    /// CalState uses ENABLE (8-bit boolean), so CalReference lands at bit 72
+    /// (byte 9) and CalDark at bit 136 (byte 17) — both byte-aligned.
+    /// If CalState were 1-bit, these offsets would shift by 1 bit and the
+    /// emitter would fall through to the (incorrect) bitfield path.
+    #[test]
+    fn advanced_mission_lua_calpacket_float64_byte_aligned() {
+        let lua = parse_and_generate("advanced_mission.xml");
+
+        // Both float64 fields must be decoded via the byte-aligned slice form.
+        // buf(9, 8) = CalReference at byte 9; buf(17, 8) = CalDark at byte 17.
+        assert!(lua.contains("buf(9, 8)"),
+            "CalReference (float64 at bit 72) must use byte-aligned buf(9, 8)");
+        assert!(lua.contains("buf(17, 8)"),
+            "CalDark (float64 at bit 136) must use byte-aligned buf(17, 8)");
+
+        // Neither float64 field should use the bitfield path (which would
+        // pass an integer to ProtoField.double and produce garbage).
+        assert!(!lua.contains("calreference\"], buf(9, 9)"),
+            "CalReference must not span 9 bytes (old unaligned bitfield span)");
+        assert!(!lua.contains(":bitfield(1, 64)"),
+            "no :bitfield(1, 64) call expected — CalReference/CalDark must be byte-aligned");
+    }
+
+    /// Verify the WARNING comment is emitted for a synthetically-constructed
+    /// unaligned float field so the fallback path is exercised by a unit test.
+    #[test]
+    fn unaligned_float_field_emits_warning_not_bitfield() {
+        // Manually construct a float64 field at bit offset 1 (non-byte-aligned).
+        let field = crate::layout::FieldLayout {
+            name: "UnalignedDouble".to_string(),
+            type_info: crate::layout::TypeInfo::Float {
+                size_in_bits: 64,
+                byte_order_lsb: false,
+            },
+            bit_offset: 1,
+        };
+        let leaf = make_leaf("Pkt", None, vec![field]);
+        let lua = generate_lua(&[leaf], 4321, false);
+
+        assert!(lua.contains("WARNING"),
+            "unaligned float64 must emit a WARNING comment");
+        assert!(!lua.contains(":bitfield("),
+            "unaligned float64 must NOT use bitfield() (would pass integer to ProtoField.double)");
+        // Falls back to byte-aligned read from byte 0, length 8.
+        assert!(lua.contains("buf(0, 8)"),
+            "unaligned float64 fallback must read 8 bytes from the nearest byte boundary");
+    }
+
+    // ── ccsds_realworld.xml Lua tests ─────────────────────────────────────────
+
+    /// Unaligned APID discriminator at bit 5, size 11 → buf(0, 2):bitfield(5, 11).
+    #[test]
+    fn ccsds_realworld_lua_unaligned_discriminator() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        assert!(
+            lua.contains("buf(0, 2):bitfield(5, 11)"),
+            "APID at bit offset 5 (11-bit) must use bitfield(5, 11) for discriminator read — got:\n{lua}"
+        );
+    }
+
+    /// All 6 APID values appear in the dispatch map.
+    #[test]
+    fn ccsds_realworld_lua_dispatch_map() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        assert!(lua.contains("XTCE_MAP"), "dispatch map required");
+        for apid in &[100, 200, 300, 400, 500, 600] {
+            assert!(lua.contains(&format!("[{apid}]")),
+                "XTCE_MAP must contain APID {apid}");
+        }
+    }
+
+    /// CCSDS header sub-byte fields all use bitfield() extraction.
+    #[test]
+    fn ccsds_realworld_lua_header_fields_use_bitfield() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        // VersionNumber: 3 bits at offset 0 → bitfield(0, 3)
+        assert!(lua.contains(":bitfield(0, 3)"),
+            "VersionNumber (3-bit at offset 0) must use bitfield(0, 3)");
+        // PacketType: 1 bit at offset 3 → bitfield(3, 1)
+        assert!(lua.contains(":bitfield(3, 1)"),
+            "PacketType (1-bit at offset 3) must use bitfield(3, 1)");
+        // SecondaryHdrFlag: 1 bit at offset 4 → bitfield(4, 1)
+        assert!(lua.contains(":bitfield(4, 1)"),
+            "SecondaryHdrFlag (1-bit at offset 4) must use bitfield(4, 1)");
+        // APID: 11 bits at offset 5 → bitfield(5, 11)
+        assert!(lua.contains(":bitfield(5, 11)"),
+            "APID (11-bit at offset 5) must use bitfield(5, 11)");
+        // SequenceFlags: 2 bits at offset 16 → bit 16 in byte 2 = byte_off=2, bit_in_byte=0
+        assert!(lua.contains(":bitfield(0, 2)"),
+            "SequenceFlags (2-bit) must use bitfield(0, 2)");
+        // SequenceCount: 14 bits at offset 18 → byte_off=2, bit_in_byte=2
+        assert!(lua.contains(":bitfield(2, 14)"),
+            "SequenceCount (14-bit at bit offset 18) must use bitfield(2, 14)");
+    }
+
+    /// Little-endian fields in DiagPacket must use tree:add_le.
+    #[test]
+    fn ccsds_realworld_lua_le_fields_use_add_le() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        assert!(lua.contains("tree:add_le(F[\"diagpacket.diagvoltagele\"]"),
+            "LE uint16 DiagVoltageLE must use add_le");
+        assert!(lua.contains("tree:add_le(F[\"diagpacket.diagtemple\"]"),
+            "LE int16 DiagTempLE must use add_le");
+        assert!(lua.contains("tree:add_le(F[\"diagpacket.diagcounterle\"]"),
+            "LE uint32 DiagCounterLE must use add_le");
+    }
+
+    /// float64 field must emit ProtoField.double.
+    #[test]
+    fn ccsds_realworld_lua_float64_is_double() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        assert!(lua.contains("ProtoField.double("),
+            "FLOAT64 CalibratedFlux must emit ProtoField.double");
+    }
+
+    /// uint64 field must emit ProtoField.uint64.
+    #[test]
+    fn ccsds_realworld_lua_uint64_field() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        assert!(lua.contains("ProtoField.uint64("),
+            "UINT64 GPSSeconds must emit ProtoField.uint64");
+    }
+
+    /// Signed int16 LE field must emit ProtoField.int16.
+    #[test]
+    fn ccsds_realworld_lua_signed_int16() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        assert!(lua.contains("ProtoField.int16("),
+            "signed INT16LE DiagTempLE must emit ProtoField.int16");
+    }
+
+    /// Binary blob must emit ProtoField.bytes.
+    #[test]
+    fn ccsds_realworld_lua_binary_blob() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        assert!(lua.contains("ProtoField.bytes("),
+            "binary DiagBlob must emit ProtoField.bytes");
+    }
+
+    /// String field must emit ProtoField.string.
+    #[test]
+    fn ccsds_realworld_lua_string_field() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        assert!(lua.contains("ProtoField.string("),
+            "AsciiMsg80Type EventMsg must emit ProtoField.string");
+    }
+
+    /// Enum fields must produce Lua value tables.
+    #[test]
+    fn ccsds_realworld_lua_enum_tables() {
+        let lua = parse_and_generate("ccsds_realworld.xml");
+        // SequenceFlags enum
+        assert!(lua.contains("\"STANDALONE\""),  "STANDALONE SeqFlags label must appear");
+        assert!(lua.contains("\"CONTINUATION\""), "CONTINUATION SeqFlags label must appear");
+        // SeverityType
+        assert!(lua.contains("\"CRITICAL\""),    "CRITICAL severity label must appear");
+        // SyncSourceType
+        assert!(lua.contains("\"INTERNAL\""),    "INTERNAL sync source must appear");
+        assert!(lua.contains("\"GNSS\""),         "GNSS sync source must appear");
+    }
+
+    // ── tshark end-to-end integration tests ──────────────────────────────────
+    //
+    // These tests exercise the full pipeline:
+    //   parse XML → layout → gen_lua + gen_pcap → tshark decode → field values
+    //
+    // Each test skips gracefully (eprintln + return) when tshark is not found
+    // on PATH, mirroring the luac syntax check above.
+
+    /// Returns true when `tshark --version` exits successfully.
+    fn tshark_available() -> bool {
+        std::process::Command::new("tshark")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Write `pcap` and `lua` to temp files, run
+    ///   `tshark -r <pcap> -X lua_script:<lua> -T fields -e <field>`
+    /// and return one line of output per packet (empty string when the field
+    /// was not decoded for that packet).  Temp files are deleted after tshark
+    /// exits.
+    fn run_tshark_extract(pcap: &[u8], lua: &str, field: &str) -> Vec<String> {
+        // Build a per-test-unique prefix from thread name + PID so parallel
+        // test runs do not collide.
+        let prefix = std::thread::current()
+            .name()
+            .unwrap_or("xtce_test")
+            .replace("::", "_")
+            .replace(['/', '\\', ' '], "_");
+        let pid = std::process::id();
+
+        let pcap_path = std::env::temp_dir()
+            .join(format!("{prefix}_{pid}.pcap"));
+        let lua_path = std::env::temp_dir()
+            .join(format!("{prefix}_{pid}.lua"));
+
+        std::fs::write(&pcap_path, pcap).expect("write temp pcap");
+        std::fs::write(&lua_path, lua).expect("write temp lua");
+
+        let output = std::process::Command::new("tshark")
+            .arg("-r").arg(&pcap_path)
+            .arg("-X").arg(format!("lua_script:{}", lua_path.display()))
+            .arg("-T").arg("fields")
+            .arg("-e").arg(field)
+            .output()
+            .expect("failed to run tshark");
+
+        let _ = std::fs::remove_file(&pcap_path);
+        let _ = std::fs::remove_file(&lua_path);
+
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Parse a test XML file and return all leaf containers.
+    fn load_leaves(file_name: &str) -> Vec<crate::layout::LeafContainer> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../test_data")
+            .join(file_name);
+        let ss = xtce_core::parser::parse_file(&path)
+            .unwrap_or_else(|e| panic!("{file_name}: parse failed: {e}"));
+        crate::layout::find_leaf_containers(&ss)
+    }
+
+    const TS_PORT: u16 = 4321;
+
+    /// Build a single-packet PCAP for `leaf_name` together with a full Lua
+    /// dissector covering all leaves in the file.  The single-packet approach
+    /// keeps tshark output simple (only one line per field extraction).
+    fn single_leaf_pcap_lua(
+        leaves: &[crate::layout::LeafContainer],
+        leaf_name: &str,
+    ) -> (Vec<u8>, String) {
+        let leaf = leaves
+            .iter()
+            .find(|l| l.name == leaf_name)
+            .unwrap_or_else(|| panic!("leaf '{leaf_name}' not found"));
+        // Generate Lua for all leaves so the XTCE_MAP + dispatch logic is
+        // intact, but generate a PCAP for only this one leaf.
+        let pcap = crate::testdata::generate_pcap(std::slice::from_ref(leaf), TS_PORT);
+        let lua = generate_lua(leaves, TS_PORT, false);
+        (pcap, lua)
+    }
+
+    /// Run extraction and return the first non-empty field value, if any.
+    fn extract_first(pcap: &[u8], lua: &str, field: &str) -> Option<String> {
+        run_tshark_extract(pcap, lua, field)
+            .into_iter()
+            .find(|s| !s.is_empty())
+    }
+
+    // ── Test 1: bitfield APID dispatch (advanced_mission.xml) ────────────────
+
+    /// Both advanced_mission and ccsds_realworld now use the same bit-packed
+    /// CCSDS primary header: 11-bit APID at bit offset 5, decoded via
+    /// buf(0,2):bitfield(5,11).  The dispatch map routes APID=100 →
+    /// dissect_hkpacket and `-e xtce.hkpacket.apid` returns "100".
+    #[test]
+    fn tshark_advanced_mission_hkpacket_apid_bitfield() {
+        if !tshark_available() {
+            eprintln!("tshark not found — skipping tshark integration test");
+            return;
+        }
+        let leaves = load_leaves("advanced_mission.xml");
+        let (pcap, lua) = single_leaf_pcap_lua(&leaves, "HKPacket");
+        let val = extract_first(&pcap, &lua, "xtce.hkpacket.apid")
+            .expect("xtce.hkpacket.apid was not decoded — dispatch may have failed");
+        assert_eq!(val, "100",
+            "11-bit APID at bit offset 5 (bitfield path) must decode to 100");
+    }
+
+    // ── Test 2: bitfield APID dispatch (ccsds_realworld.xml) ─────────────────
+
+    /// In ccsds_realworld.xml the APID is at bit offset 5, size 11, decoded
+    /// via `buf(0,2):bitfield(5,11)` in both the dispatch and the field emit.
+    /// Verifies the unaligned discriminator path end-to-end.
+    #[test]
+    fn tshark_ccsds_hkpacket_apid_bitfield_dispatch() {
+        if !tshark_available() {
+            eprintln!("tshark not found — skipping tshark integration test");
+            return;
+        }
+        let leaves = load_leaves("ccsds_realworld.xml");
+        let (pcap, lua) = single_leaf_pcap_lua(&leaves, "HKPacket");
+        let val = extract_first(&pcap, &lua, "xtce.hkpacket.apid")
+            .expect("xtce.hkpacket.apid was not decoded via bitfield(5,11)");
+        assert_eq!(val, "100",
+            "11-bit APID at bit offset 5 (bitfield path) must decode to 100");
+    }
+
+    // ── Test 3: 14-bit sub-byte SequenceCount ────────────────────────────────
+
+    /// SequenceCount occupies 14 bits at bit offset 18, decoded with
+    /// `buf(2,2):bitfield(2,14)`.  The testdata generator writes a random value;
+    /// it must parse as an integer in the valid 14-bit range [0, 16383].
+    #[test]
+    fn tshark_ccsds_seqcount_14bit_value() {
+        if !tshark_available() {
+            eprintln!("tshark not found — skipping tshark integration test");
+            return;
+        }
+        let leaves = load_leaves("ccsds_realworld.xml");
+        let (pcap, lua) = single_leaf_pcap_lua(&leaves, "HKPacket");
+        let val = extract_first(&pcap, &lua, "xtce.hkpacket.sequencecount")
+            .expect("xtce.hkpacket.sequencecount not decoded");
+        let n: u64 = val.parse()
+            .unwrap_or_else(|_| panic!("SequenceCount must parse as integer, got {val:?}"));
+        assert!(n <= 16383, "14-bit SequenceCount must be in [0, 16383], got {n}");
+    }
+
+    // ── Test 4: float64 field (CalibratedFlux in SciPacket) ──────────────────
+
+    /// CalibratedFlux uses `ProtoField.double`.  The testdata generator writes
+    /// a random finite value; tshark must decode it as a parseable number.
+    #[test]
+    fn tshark_ccsds_scipacket_float64_calibratedflux() {
+        if !tshark_available() {
+            eprintln!("tshark not found — skipping tshark integration test");
+            return;
+        }
+        let leaves = load_leaves("ccsds_realworld.xml");
+        let (pcap, lua) = single_leaf_pcap_lua(&leaves, "SciPacket");
+        let val = extract_first(&pcap, &lua, "xtce.scipacket.calibratedflux")
+            .expect("xtce.scipacket.calibratedflux not decoded");
+        val.parse::<f64>()
+            .unwrap_or_else(|_| panic!("CalibratedFlux must parse as f64, got {val:?}"));
+    }
+
+    // ── Test 5: little-endian uint16 field (DiagVoltageLE in DiagPacket) ──────
+
+    /// DiagVoltageLE is a 16-bit LE unsigned integer.  The exact value depends
+    /// on how the random bytes are interpreted as LE, but the field must be
+    /// decoded (non-empty) and in the valid uint16 range [0, 65535].
+    #[test]
+    fn tshark_ccsds_diagpacket_le_uint16_add_le_path() {
+        if !tshark_available() {
+            eprintln!("tshark not found — skipping tshark integration test");
+            return;
+        }
+        let leaves = load_leaves("ccsds_realworld.xml");
+        let (pcap, lua) = single_leaf_pcap_lua(&leaves, "DiagPacket");
+        let val = extract_first(&pcap, &lua, "xtce.diagpacket.diagvoltagele")
+            .expect("xtce.diagpacket.diagvoltagele not decoded — add_le path may be broken");
+        let n: u64 = val.parse()
+            .unwrap_or_else(|_| panic!("DiagVoltageLE must parse as integer, got {val:?}"));
+        assert!(n <= 65535, "LE uint16 must be in [0, 65535], got {n}");
+    }
+
+    // ── Test 6: 80-byte ASCII string field (EventMsg in EventPacket) ──────────
+
+    /// EventMsg is a 640-bit US-ASCII string filled with random printable
+    /// alphanumeric characters.  `ProtoField.string` + `tree:add()` must
+    /// decode it as a non-empty string of printable characters.
+    #[test]
+    fn tshark_ccsds_eventpacket_string_field_decoded() {
+        if !tshark_available() {
+            eprintln!("tshark not found — skipping tshark integration test");
+            return;
+        }
+        let leaves = load_leaves("ccsds_realworld.xml");
+        let (pcap, lua) = single_leaf_pcap_lua(&leaves, "EventPacket");
+        let val = extract_first(&pcap, &lua, "xtce.eventpacket.eventmsg")
+            .expect("xtce.eventpacket.eventmsg not decoded");
+        assert!(!val.is_empty(), "EventMsg must decode to a non-empty string");
+        assert!(val.chars().all(|c| c.is_ascii_alphanumeric()),
+            "EventMsg must contain only alphanumeric ASCII, got {val:?}");
+    }
+
+    // ── Test 7: Wireshark Protocol column set to XTCE ─────────────────────────
+
+    /// The dissector sets `pkt.cols.protocol = "XTCE"`.
+    /// `-e _ws.col.Protocol` must contain "XTCE" (case-insensitive) for the
+    /// decoded packet.
+    #[test]
+    fn tshark_protocol_column_is_xtce() {
+        if !tshark_available() {
+            eprintln!("tshark not found — skipping tshark integration test");
+            return;
+        }
+        let leaves = load_leaves("advanced_mission.xml");
+        let (pcap, lua) = single_leaf_pcap_lua(&leaves, "HKPacket");
+        let lines = run_tshark_extract(&pcap, &lua, "_ws.col.Protocol");
+        let has_xtce = lines.iter().any(|l| l.to_uppercase().contains("XTCE"));
+        assert!(has_xtce,
+            "Protocol column must be XTCE after dissector sets pkt.cols.protocol; got {lines:?}");
     }
 }
 
